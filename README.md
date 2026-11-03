@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/adw-wordmark.svg" alt="ADW" width="560"></p>
+<p align="center"><img src="https://github.com/ryanmat/adw/releases/download/v3.5.8/adw-logo.png" alt="ADW" width="720"></p>
 
 The spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic gates holding the line for code and graded evals holding it for model behavior.
 
