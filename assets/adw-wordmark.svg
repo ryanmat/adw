@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" width="560" height="200" role="img" aria-label="ADW: spec, plan, run">
+  <title>ADW</title>
+  <desc>The adw wordmark: three heavy italic letters in red on black, with a cyan ghost offset to the left.</desc>
+  <defs>
+    <path id="glyphs" fill-rule="evenodd" d="
+      M0 100 L38 0 L62 0 L100 100 L76 100 L68 78 L32 78 L24 100 Z M40 58 L50 26 L60 58 Z
+      M120 0 L175 0 A50 50 0 0 1 175 100 L120 100 Z M144 24 L172 24 A26 26 0 0 1 172 76 L144 76 Z
+      M238 0 L262 0 L273 66 L285 0 L303 0 L315 66 L326 0 L350 0 L330 100 L302 100 L294 54 L286 100 L258 100 Z"/>
+  </defs>
+  <rect width="560" height="200" rx="14" fill="#0B0B0F"/>
+  <g transform="translate(118 42) skewX(-14)">
+    <use href="#glyphs" transform="translate(-7 0)" fill="#2BD1FF" opacity="0.85"/>
+    <use href="#glyphs" transform="translate(5 0)" fill="#7A0A14" opacity="0.9"/>
+    <use href="#glyphs" fill="#E8172B" stroke="#FFFFFF" stroke-width="3" stroke-linejoin="miter" paint-order="stroke fill"/>
+  </g>
+  <g fill="#FFFFFF" font-family="Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" letter-spacing="6">
+    <text x="280" y="178" text-anchor="middle">SPEC . PLAN . RUN</text>
+  </g>
+  <rect x="24" y="24" width="512" height="152" rx="8" fill="none" stroke="#E8172B" stroke-width="1.5" opacity="0.55"/>
+</svg>

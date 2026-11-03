@@ -1,13 +1,13 @@
-# AI Development Workflow
+# AI development workflow
+
+Claude Code owns spec through ship in the terminal, with deterministic gates (tests, lint, pre-commit) holding the line for code and graded evals holding it for model behavior.
 
 Version: 3.5.8
-Last revised: 2026-11-02
+Last revised: 2026-11-03
 
-One line: Claude Code owns spec through ship in the terminal; the IDE reviews, the browser verifies. Deterministic gates (tests, lint, pre-commit) hold the line for code; graded evals hold it for model behavior.
+The IDE reviews and the browser verifies. This document is for the human. Do not load it into agent context as standing instructions. The only machine-facing pieces are the install blocks in the "Config placement" section.
 
-This document is for the human. Do not load it into agent context as standing instructions. The only machine-facing pieces are the install blocks in the "Config placement" section.
-
-History in brief: the workflow began as a spec, plan, execute loop run by hand across chat and terminal surfaces; v2 removed the separate todo list, added the eval phase and the weight-class floor; v3 moved every phase into Claude Code, gave each slash command exactly one source file, and added the unattended mode; the repository then shipped as the `adw` plugin, so the commands are namespaced (`/adw:spec`, `/adw:plan-tdd`, `/adw:next`) and the plan grammar, the guard, the Stop gate and the deterministic step gate moved from prompt text into code.
+History in brief. The workflow began as a spec, plan, execute loop run by hand across chat and terminal surfaces. Version 2 removed the separate todo list and added the eval phase and the weight-class floor. Then v3 moved every phase into Claude Code, gave each slash command exactly one source file, and added the unattended mode. The repository then shipped as the `adw` plugin, so the commands are namespaced (`/adw:spec`, `/adw:plan-tdd`, `/adw:next`), and the plan grammar, the guard, the Stop gate and the deterministic step gate moved from prompt text into code.
 
 ---
 
@@ -22,11 +22,11 @@ History in brief: the workflow began as a spec, plan, execute loop run by hand a
 | VS Code Claude Code extension | Selection-scoped @-mentions during IDE-native pair-programming loops | Anything `/ide` already covers |
 | Chrome extension | Click-through verification of built web UIs, form flows, browser-side repro | Anything a test can assert instead |
 
-Rationale for the split: keep design dialectic (dead ends, rejected alternatives) out of the context the agent executes against. The agent starts from a distilled spec, not a transcript. This is enforced by artifact rather than by surface: `/adw:spec` ends at a hard stop and emits spec.md; execution reads the file, in a fresh session when the dialectic ran long.
+The split keeps design dialectic (dead ends, rejected alternatives) out of the context the agent executes against. An agent then starts from a distilled spec, not a transcript. Enforcement is by artifact, not by surface: `/adw:spec` ends at a hard stop and emits spec.md, and execution reads the file, in a fresh session when the dialectic ran long.
 
 ## Weight classes
 
-The full pipeline earns its cost only above a size floor. Applying it uniformly leads to either gold-plating scripts or skipping it inconsistently; a documented floor prevents both.
+The full pipeline earns its cost only above a size floor. Applied uniformly, it gold-plates scripts or gets skipped inconsistently; a documented floor prevents both.
 
 | Class | Size | Process |
 |---|---|---|
@@ -43,7 +43,7 @@ Work whose artifacts are themselves deliverables defaults to System class regard
 
 Problem-space work. Decide what to build and why, in the repo, with connectors and research tools already mounted.
 
-`/adw:spec` carries the standing contract in one versioned file (source: `commands/spec.md` in this repo). Modes by prefix: no prefix or `new:` runs the one-question-at-a-time interview (System class); `quick:` runs the compressed path, assumptions stated, no interview (Feature class); `v0:` runs the pre-discovery mode, producing a constraint base from named sources, a short judgment-call interview, and a Decision Register with defensible defaults. The interview covers goals, requirements, architecture tradeoffs, data handling, error handling, testing, and, when the deliverable includes model behavior, the eval approach: what good output means, how it is graded, and the acceptance threshold.
+`/adw:spec` carries the standing contract in one versioned file (source: `commands/spec.md` in this repo). The prefix picks the mode. No prefix or `new:` runs the one-question-at-a-time interview (System class). `quick:` runs the compressed path, assumptions stated, no interview (Feature class). `v0:` runs the pre-discovery mode: a constraint base from named sources, a short judgment-call interview, and a Decision Register with defensible defaults. The interview covers goals, requirements, architecture tradeoffs, data handling, error handling and testing. When the deliverable includes model behavior it also covers the eval approach: what good output means, how it is graded, and the acceptance threshold.
 
 Research policy: external synthesis (vendor and API landscape, compliance surface, competitive analysis, documents that need citations) runs as web research inside the session. Repo-grounded questions are Plan Mode's job, and quick factual checks need no research pass at all.
 
@@ -55,7 +55,7 @@ Output: `spec.md` on disk in the target repo, committed. For model-behavior syst
 
 `/adw:plan-tdd` in the repo turns `spec.md` into `prompt_plan.md`: ordered TDD implementation prompts in the plan grammar `scripts/next_plan.py` validates, each beginning with the tests to write and ending with explicit completion criteria. The plan is its own tracking artifact; steps are marked completed in place. There is no separate todo.md: duplicated state goes stale by step two and becomes a misleading status artifact.
 
-Brownfield, or any repo with existing code: ground the plan against reality first. When the repo has code and no spec at all, the `adw:spec-miner` agent mines the baseline `spec.md` (Requirement and Invariant blocks anchored to the code that enforces them) before `/adw:plan-tdd` runs. Either let `/adw:plan-tdd`'s built-in exploration pass read the actual implementation, or for gnarly existing code run an explicit Plan Mode pass pointed at `spec.md` before invoking `/adw:plan-tdd`. A plan written without reading the code can hallucinate a codebase; a repo-grounded pass cannot. Surface conflicts between spec and code before the plan is written, not during execution.
+Brownfield, or any repo with existing code: ground the plan against reality first. When the repo has code and no spec at all, the `adw:spec-miner` agent mines the baseline `spec.md` (Requirement and Invariant blocks anchored to the code that enforces them) before `/adw:plan-tdd` runs. The built-in exploration pass of `/adw:plan-tdd` reads the actual implementation for light changes; gnarly existing code gets an explicit Plan Mode pass pointed at `spec.md` first. A plan written without reading the code can hallucinate a codebase; a repo-grounded pass cannot. Surface conflicts between spec and code before the plan is written, not during execution.
 
 If the spec has an Eval plan, the implementation plan includes eval-harness steps early: harness and graded case set before the behavior they grade, mirroring test-first.
 
@@ -82,17 +82,17 @@ Supporting practices during the loop:
 
 ### Unattended mode: `/adw:next auto`
 
-The interactive loop has a human at every chunk boundary and a deterministic `check` between each step and its commit, which is the right default and also the thing that keeps it from running while nobody is watching. `/adw:next auto` removes that trigger for work that is already decomposed, and pays for it with restrictions rather than trust.
+The interactive loop has a human at every chunk boundary and a deterministic `check` between each step and its commit. That is the right default, and it is also what keeps the loop from running while nobody is watching. `/adw:next auto` removes that trigger for work that is already decomposed, and pays for it with restrictions rather than trust.
 
-It is hold-only. A run branches from local default into a worktree, commits per step, and ends at a labeled pull request. It never merges, and nothing reaches the default branch without a human. It runs only in repositories whose GitHub owner is in `ADW_OWNERS` and that are not forks, which keeps an unattended agent away from every repository you did not name.
+It is hold-only. A run branches from local default into a worktree, commits per step, and ends at a labeled pull request. It never merges, and nothing reaches the default branch without a human. A run targets only a repository whose GitHub owner is in `ADW_OWNERS` and that is not a fork, which keeps an unattended agent away from every repository you did not name.
 
-What makes it safe is that the enforcement is code, not instruction. A guard hook denies hook bypasses everywhere and, while a run is live, denies merges, force pushes, and the destructive git verbs. A deterministic gate runs between the implementer and the commit: it re-applies the step's new tests to the commit the step started from and requires them to fail there, so test-first is proven rather than claimed; it refuses a staged secret, a toolchain file, or a change to the gate's own config the step never named; and it compares collected, skipped, and xfailed counts against the baseline, so a step cannot reach green by shrinking the suite. The orchestrator never fixes review findings itself, and a second failure on the same step stops the run.
+The enforcement is code, not instruction. A guard hook denies hook bypasses everywhere and, while a run is live, denies merges, force pushes, and the destructive git verbs. Between the implementer and the commit, a deterministic gate runs. It re-applies the step's new tests to the commit the step started from and requires them to fail there, so test-first is proven rather than claimed. The same gate refuses a staged secret, a toolchain file, or a change to the gate's own config the step never named, and compares collected, skipped, and xfailed counts against the baseline, so a step cannot reach green by shrinking the suite. Nor does the orchestrator fix review findings itself; a second failure on the same step stops the run.
 
 The cost of a run is bounded by a step budget per invocation, a per-step diff cap, and a run-level diff cap. Before starting one, check remaining usage; an unattended loop that stops halfway through a step because the budget ran out leaves more mess than it saves.
 
-Two contracts carry a run's rulings and findings forward. Each step's implementer receives a context file beside its brief: the plan's Decisions and Findings as they stand plus a roster of the earlier steps with their states and notes, so step K knows what steps 1 to K-1 decided and found. At wrap-up, a tracked plan's Status notes, Decisions, and Findings ride the branch and the morning merge carries them into the next run; a plan kept untracked at the root is copied into the run's worktree at start and copied back once the PR exists. Every entry appended during a run carries a `[run <id>]` tag, so an agent's unreviewed ruling reads differently from one the owner wrote by hand, and the morning read is where that outbox gets pruned. The PR body is the full run summary on a private repo and a terse one, no step reports and no absolute paths, on a public one; either body is scanned for secret-shaped content before anything is pushed.
+Two contracts carry a run's rulings and findings forward. Each step's implementer receives a context file beside its brief: the plan's Decisions and Findings as they stand, plus a roster of the earlier steps with their states and notes. Step K therefore knows what steps 1 to K-1 decided and found. At wrap-up, a tracked plan's Status notes, Decisions, and Findings ride the branch, and the morning merge carries them into the next run. A plan kept untracked at the root is copied into the run's worktree at start and copied back after the PR exists. Every entry appended during a run carries a `[run <id>]` tag, so an agent's unreviewed ruling reads differently from one the owner wrote by hand; the morning read is where that outbox gets pruned. The PR body is the full run summary on a private repo and a terse one, with no step reports and no absolute paths, on a public one. Either body is scanned for secret-shaped content before anything is pushed.
 
-Use it when the plan is genuinely decomposed and the steps are mechanical. Keep the interactive loop for anything where the shape of the answer is still in question, because a step that needs judgment will come back as a blocked decision anyway, and that round trip costs more than doing it attended.
+Use it when the plan is genuinely decomposed and the steps are mechanical. Keep the interactive loop for anything where the shape of the answer is still in question. A step that needs judgment comes back as a blocked decision anyway, and that round trip costs more than doing it attended.
 
 ## Phase 4: Eval gate (model-behavior systems only)
 
@@ -112,7 +112,7 @@ Tooling is deliberately unspecified here; the invariant is the gate, not the too
 - Pre-commit is the deterministic gate. The agent wants to commit; the hook forces lint, format, and hygiene to pass locally instead of clogging CI.
 - Web UIs: use the Chrome extension to click through the built flow (forms, auth paths, error states) before calling a step done. Anything assertable belongs in a test instead.
 - PR and CI as normal. Commit history keyed to prompt_plan steps is the audit trail; captured test output and eval reports are the evidence attached to it.
-- Session close, in order, once the work is validated and pushed or merged: an independent done check over the done claim, whose verdict record is what the merge gate reads; a retrospective into `docs/lessons.md` when the session received a correction; the committed Handoff entry in the plan document, pointer style (HEAD sha, commits landed, step states, open Decisions, the next move); then the handoff file derived from that entry, with a final `## Kickoff` section naming repo, branch, HEAD sha, and the exact paste line for the next session; then the paste line printed as the session's last output. The kickoff line opens by checking `git log <sha>..HEAD` and the plan's `status`; commits past the sha mean the handoff is stale and the plan wins. With nothing open, the handoff file says "No active work" plus the sha and no line is printed. The handoff file is a derived local pointer; state the pipeline or another machine needs lives only in the plan file, `lessons.md`, and the committed Handoff.
+- Session close runs in a fixed order once the work is validated and pushed or merged. First the independent done check over the done claim, whose verdict record is what the merge gate reads. Then a retrospective into `docs/lessons.md` when the session received a correction. Next the committed Handoff entry in the plan document, pointer style: HEAD sha, commits landed, step states, open Decisions, the next move. Then the handoff file derived from that entry, with a final `## Kickoff` section naming repo, branch, HEAD sha, and the exact paste line for the next session. Last, the paste line printed as the session's last output. The kickoff line opens by checking `git log <sha>..HEAD` and the plan's `status`; commits past the sha mean the handoff is stale and the plan wins. With nothing open, the handoff file says "No active work" plus the sha and no line is printed. The handoff file is a derived local pointer; state the pipeline or another machine needs lives only in the plan file, `lessons.md`, and the committed Handoff.
 
 ---
 
@@ -161,7 +161,7 @@ The commands are prose the model reads; these are the parts that execute. They s
 | Spec-mining agent | `agents/spec-miner.md` | dispatched as `adw:spec-miner` |
 | Markdown deliverables skill | `skills/markdown/SKILL.md` | loaded on task match |
 
-The scripts are standard library only and run under any Python 3.12 or later, so plain `python3` works with no environment to sync. The guard hook is registered under `PreToolUse` on two matchers, `Bash` and `Edit|Write|MultiEdit`. It denies hook bypasses in every repo, all the time, and adds the merge and destructive-git denials only while a run-state file exists. Installing the plugin is the whole install; there is no per-repo step. A plugin cannot ship `permissions.deny` rules, so those stay in user settings, and in managed settings for a sandbox image.
+The scripts are standard library only and run under any Python 3.12 or later, so plain `python3` works with no environment to sync. Under `PreToolUse`, the guard hook is registered on two matchers, `Bash` and `Edit|Write|MultiEdit`. It denies hook bypasses in every repo, all the time, and adds the merge and destructive-git denials only while a run-state file exists. Installing the plugin is the whole install; there is no per-repo step. A plugin cannot ship `permissions.deny` rules, so those stay in user settings, and in managed settings for a sandbox image.
 
 ### 2. Project CLAUDE.md block (per repo, keep the whole file short)
 
@@ -213,7 +213,7 @@ Keep tests and evals out of pre-commit (too slow per commit); the loop and CI ow
 ### What does NOT get installed
 
 - This document. It lives in this repo, never in a project tree. Never referenced from CLAUDE.md, never in standing agent context.
-- The global CLAUDE.md carries exactly one line from this workflow, the weight-class routing rule (Feature-class and above requires a spec.md born from `/adw:spec` and goes through `/adw:plan-tdd` and `/adw:next`; no ad-hoc implementation). Nothing else from this document goes there. It stays lean; the loop lives in the slash commands, conventions live per project, enforcement lives in hooks and pre-commit.
+- The global CLAUDE.md carries exactly one line from this workflow, the weight-class routing rule: Feature-class and above requires a spec.md born from `/adw:spec` and goes through `/adw:plan-tdd` and `/adw:next`, with no ad-hoc implementation. Nothing else from this document goes there. It stays lean. The loop lives in the slash commands, conventions live per project, and enforcement lives in hooks and pre-commit.
 
 ---
 
@@ -223,6 +223,7 @@ The artifacts map one-to-one onto the stages a reviewer or a client wants to see
 
 | Stage | Artifact | What the reader sees |
 |---|---|---|
+| Inception | The intent each unit of work serves: the `Intent:` trailer on its pull request, and the `## Intents` Now table that maps live intents to their specs | Every change traces to a stated outcome, and `query intent` lists what has landed against it |
 | Discovery | spec.md (interview-derived, rejected alternatives recorded) | The problem was understood before code existed |
 | Architecture | prompt_plan.md, plus ADRs for load-bearing decisions | The build order and its reasoning are inspectable |
 | Implementation | Commit history keyed to plan steps, captured test output | Every change is scoped, gated, and evidenced |
@@ -230,7 +231,7 @@ The artifacts map one-to-one onto the stages a reviewer or a client wants to see
 
 Evidence discipline (output over assertion) is what makes agent-built work defensible in review. It is baked into the loop, not the writeup.
 
-Cost the phases separately when modeling a build. Spec and plan cycles are cheap and high-leverage; execution and eval loops dominate token spend, so phase separation is a cost-control lever as well as a quality one. Claude Code exposes session cost reporting and telemetry hooks; verify the current mechanisms against its docs before wiring per-phase capture or quoting numbers, since that surface changes and this document does not track it.
+Cost the phases separately when modeling a build. Spec and plan cycles are cheap and high-leverage; execution and eval loops dominate token spend, so phase separation is a cost-control lever as well as a quality one. Claude Code exposes session cost reporting and telemetry hooks. Verify the mechanisms against its docs before wiring per-phase capture or quoting numbers, because that surface changes and this document does not track it.
 
 ## References
 

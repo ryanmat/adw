@@ -1,6 +1,8 @@
-# adw
+<p align="center"><img src="assets/adw-wordmark.svg" alt="ADW" width="560"></p>
 
 The spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic gates holding the line for code and graded evals holding it for model behavior.
+
+[![ci](https://github.com/ryanmat/adw/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanmat/adw/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/ryanmat/adw)](https://github.com/ryanmat/adw/releases/latest) [![license](https://img.shields.io/github/license/ryanmat/adw)](LICENSE)
 
 ## Overview
 
@@ -59,6 +61,23 @@ For a plan that is already decomposed into mechanical steps, `/adw:next auto [N]
 
 The methodology is `ai-dev-workflow.md`; the moves without the reasoning are `workflow-runbook.md`.
 
+## Intents and traceability
+
+Above a spec sits an intent: the outcome a set of units of work serves, carried by an id such as `30.1`. The engine never writes one. It reads them, so that every pull request traces back to the intent it serves, through two conventions:
+
+- A pull request body carries the trailer lines `Spec: <slug>`, `Closes: <requirement ids>`, `Intent: <intent ids>` and `Approved-by: @<login>`. An unattended run writes the first, second and fourth at wrap-up, from the plan header, the DONE steps and the delivery record; the `Intent:` line is the author's. The projection reads the first line of each.
+- `docs/setup-plan.md` in the project carries a `## Intents` section whose `### Now` table has an `Intent` column and a `Specs` column, mapping each live intent to the specs that serve it. The landed report fills its Intent cell from that table when a pull request names a spec and no intent.
+
+`scripts/next_projection.py` builds a SQLite store from a checkout and answers typed questions from it; no query takes SQL:
+
+```bash
+python3 <installPath>/scripts/next_projection.py build --target <checkout>
+python3 <installPath>/scripts/next_projection.py query intent 30.1
+python3 <installPath>/scripts/next_projection.py query coverage <capability-slug>
+```
+
+`query intent` lists the intent's merged pull requests with their deploy and its open ones in base-chain order; `query coverage` lists a capability's requirements and the pull requests that close them. `query entity`, `find`, `neighbors`, `path` and `timeline` walk the same store.
+
 ## Layout
 
 - `ai-dev-workflow.md` - the methodology: surfaces and their jobs, weight classes, the five phases including unattended execution, config placement.
@@ -69,7 +88,7 @@ The methodology is `ai-dev-workflow.md`; the moves without the reasoning are `wo
 - `hooks/` - `hooks.json` registers `next-guard.py` on `PreToolUse` for `Bash` and `Edit|Write|MultiEdit`: it denies hook bypasses everywhere, and merges, force pushes, and destructive git while a run is live; and `stop-gate.py` on `Stop`: while `prompt_plan.md` has an open step and the tree has changes beyond the plan and the record, a turn ends only on a green Test run, and the fourth stop on one failure is allowed; and `ruling-log.py` on `PostToolUse` for `AskUserQuestion`: one line per answered question in the ruling store, `.next-auto/rulings/<session id>.jsonl` under the project dir, written only in a project where that directory already exists; and `ruling-recall.py` on `PreToolUse` for `AskUserQuestion`: the rulings of the last 48 hours that share a word with the new question, as the reason of a deny while any of them has not been shown to the session, so the model reads them before the person sees the question; the dialog asked again goes ahead.
 - `scripts/next_plan.py` - the plan grammar: validate, migrate, status, next, brief, plan-hash, byte-preserving status and section edits, and the `ruling add` and `ruling recall` commands over `scripts/rulings.py`.
 - `scripts/next_auto.py` - every git and gh operation of an unattended run, plus the deterministic gate, the attended `check` and `commit`, the merge gate, and the delivery record's call points for a plan whose Conventions carry `Record`.
-- `scripts/next_projection.py` - the delivery projection: a SQLite view over records, specs, pull requests, rulings and ledgers, with its queries.
+- `scripts/next_projection.py` - the delivery projection: a SQLite view over records, specs, pull requests and their trailers, intents, rulings and ledgers, with its typed queries.
 - `skills/markdown/SKILL.md` - the house-style Markdown deliverables skill; also uploadable to Claude Desktop via Settings > Features > Skills.
 - `tests/` - the suite for the scripts, the hooks, the command grammar, and the plugin layout. Real git repos with a local bare origin, no mocks. Fixtures are synthetic: the plans and records under `tests/fixtures/` keep the structure of real ones with their free text regenerated.
 - `evals/next-auto/` - scenario evals for unattended runs, graded on git and PR state rather than by a judge. They drive the real CLI against a fixture repository you own and record cost per scenario.
