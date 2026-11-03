@@ -731,7 +731,7 @@ def test_methodology_phase_5_carries_the_close_out_order():
 
 def test_runbook_step_5_is_chunk_paced_and_names_the_mid_chunk_stop():
     doc = (ROOT / "workflow-runbook.md").read_text()
-    step5 = _section(doc, "## Step 5: Execute the loop")
+    step5 = _section(doc, "## Run the loop")
     item2 = next(ln for ln in step5.splitlines() if ln.startswith("2. "))
     item3 = next(ln for ln in step5.splitlines() if ln.startswith("3. "))
     assert "chunk" in item2.lower() and "stops" in item2.lower()
@@ -742,7 +742,7 @@ def test_runbook_step_5_is_chunk_paced_and_names_the_mid_chunk_stop():
 
 def test_runbook_step_7_carries_the_close_out_order():
     doc = (ROOT / "workflow-runbook.md").read_text()
-    _close_out_pins(_section(doc, "## Step 7: Close the loop"), "workflow-runbook.md Step 7")
+    _close_out_pins(_section(doc, "## Close the loop"), "workflow-runbook.md Close the loop")
 
 
 def test_readme_names_the_attended_loop_as_chunk_paced():
@@ -1020,7 +1020,7 @@ def test_next_md_boundary_writes_the_verdict_record_for_merge():
 
 def test_runbook_merge_item_names_the_gate_and_the_owners_acts():
     doc = RUNBOOK.read_text()
-    step5b = _section(doc, "## Step 5b: Unattended execution")
+    step5b = _section(doc, "## Optional: Run the loop unattended")
     item8 = next(ln for ln in step5b.splitlines() if ln.startswith("8. "))
     assert "python3 <installPath>/scripts/next_auto.py merge <n>" in item8
     assert "its own Bash call" in item8
