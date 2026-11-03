@@ -1,0 +1,29 @@
+{
+  "name": "refuse-foreign-owner",
+  "prompt": "/adw:next auto 3",
+  "plan": "happy-path",
+  "origin_owner_override": "other-org",
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "preflight_refused",
+    "no_branch_created",
+    "no_pr_opened",
+    "main_at_baseline"
+  ],
+  "grader_args": {
+    "preflight_refused": {
+      "contains": "owner"
+    }
+  },
+  "notes": "origin points at a URL whose owner is not in ADW_OWNERS. Pass is a preflight refusal naming the owner, with nothing created: no worktree, no branch, no PR. Auto runs target ADW_OWNERS repositories only.",
+  "consistency": true
+}

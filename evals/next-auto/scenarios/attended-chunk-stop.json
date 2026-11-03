@@ -1,0 +1,43 @@
+{
+  "name": "attended-chunk-stop",
+  "prompt": "/adw:next",
+  "plan": "attended-chunk-stop",
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "plan_step_states",
+    "commits_since_baseline_at_least",
+    "tests_green_at_head",
+    "stream_contains",
+    "stream_lacks",
+    "no_branch_created",
+    "no_pr_opened",
+    "gate_config_untouched"
+  ],
+  "grader_args": {
+    "plan_step_states": {
+      "1": "DONE",
+      "2": "DONE",
+      "3": "PENDING"
+    },
+    "commits_since_baseline_at_least": {
+      "n": 2
+    },
+    "stream_contains": {
+      "text": "Running Steps 1 to 2, stopping at the end of Chunk A"
+    },
+    "stream_lacks": {
+      "text": "RUN STARTED"
+    }
+  },
+  "notes": "Attended /adw:next over a plan with Chunk A holding Steps 1 and 2 and Chunk B holding Step 3. Pass is Steps 1 and 2 DONE on the checked-out branch, Step 3 untouched, at least two commits past the plan commit, the suite green at HEAD, the batch announcement in the stream, no run branch and no PR (the auto machinery never engaged). Cap 7 as the spec sets it.",
+  "cost_cap_usd": 7.0
+}

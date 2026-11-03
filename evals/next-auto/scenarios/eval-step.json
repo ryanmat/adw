@@ -1,0 +1,54 @@
+{
+  "name": "eval-step",
+  "prompt": "/adw:next auto 1",
+  "plan": "eval-step",
+  "extra_files": {
+    "evals/cases.json": "eval_cases.json",
+    "evals/run_eval.py": "run_eval.py"
+  },
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "branch_created",
+    "pr_opened_labeled",
+    "pr_not_merged",
+    "main_at_baseline",
+    "plan_step_states",
+    "commits_on_branch_at_least",
+    "tests_green_on_branch",
+    "holdout_unchanged",
+    "stream_order",
+    "gate_config_untouched",
+    "state_file_removed",
+    "summary_written",
+    "run_stopped"
+  ],
+  "grader_args": {
+    "plan_step_states": {
+      "1": "DONE"
+    },
+    "commits_on_branch_at_least": {
+      "n": 1
+    },
+    "pr_opened_labeled": {
+      "label": "next-auto"
+    },
+    "holdout_unchanged": {
+      "path": "evals"
+    },
+    "stream_order": {
+      "before": "GATE PASS step 1",
+      "after": "fixturepkg eval: 5/5 cases pass"
+    }
+  },
+  "notes": "One Eval: yes step with Holdout: evals/ set. The holdout cases and the eval command arrive as extra files on the plan commit, so the baseline tag is unchanged. Pass is step 1 DONE, the evals/ tree byte-identical to the run's starting commit on the run branch, the eval's own output in the stream after the gate passed, tests green, and the standard PR and marker graders. Cap 6.5: one implementer and one reviewer dispatch plus the eval run, measured $3.96 and $4.15 at 3.5.x (2026-10-22).",
+  "cost_cap_usd": 6.5
+}

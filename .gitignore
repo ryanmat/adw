@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# eval runtime: the fixture clone and the serialization lock are not deliverables
+evals/next-auto/.run.lock
+# raw CLI transcripts are large and regenerable; the graded results are the record
+evals/next-auto/results/*.raw.jsonl

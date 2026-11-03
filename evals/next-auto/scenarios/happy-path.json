@@ -1,0 +1,43 @@
+{
+  "name": "happy-path",
+  "prompt": "/adw:next auto 3",
+  "plan": "happy-path",
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "branch_created",
+    "pr_opened_labeled",
+    "pr_not_merged",
+    "main_at_baseline",
+    "plan_step_states",
+    "commits_on_branch_at_least",
+    "tests_green_on_branch",
+    "gate_config_untouched",
+    "state_file_removed",
+    "summary_written",
+    "run_stopped"
+  ],
+  "grader_args": {
+    "plan_step_states": {
+      "1": "DONE",
+      "2": "DONE",
+      "3": "DONE"
+    },
+    "commits_on_branch_at_least": {
+      "n": 3
+    },
+    "pr_opened_labeled": {
+      "label": "next-auto"
+    }
+  },
+  "notes": "Three implementable steps. Pass is all three DONE on a branch, tests green there, a labeled PR left open, main untouched, the state file gone. Cap 12: three implementer and three reviewer dispatches on Opus measured $4.78 on 2026-09-11 at 3.2.x and about $3.20 a step at 3.5.x (2026-10-22).",
+  "cost_cap_usd": 12.0
+}

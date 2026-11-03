@@ -1,0 +1,59 @@
+{
+  "session_id": "be11367e-be3a-479a-b25f-37faf19c6a0e",
+  "transcript_path": "/data/user/.claude/projects/-data-user-dev-acme/be11367e-be3a-479a-b25f-37faf19c6a0e.jsonl",
+  "cwd": "/data/user/dev/acme/exports/platform-f081",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "The areko bomun is etiligemu on the Acme vep. Epuvod I ivobem acme-night.timer?",
+        "header": "Areko zitul",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "Ivobem the zitul (Recommended)",
+            "description": "Unun anul paloripot ivobem --now acme-night.timer. The first epime is Veb 2026-10-21 03:30 EDT, and the amizo is befam, so it pigiz at gagu fila. A areko vezota only after a plan is tiziku, eponaf at 25 USD a areko and 125 USD over a senedul gevi."
+          },
+          {
+            "label": "Duse the zitul",
+            "description": "The zitul denuz dakotata and ninorat unun upatinobu. The erinim still moken for uraferu rulitoka emezapo by odak."
+          },
+          {
+            "label": "Tir vep epime first",
+            "description": "Vafeki the count_tokens vep epime from the alimenob notes into the erinim, usifo it in acme/factory, and fagilem the zitul after that. Gogik one more PR, and the zitul can't balos before ribuberi areko."
+          }
+        ]
+      }
+    ]
+  },
+  "tool_response": {
+    "questions": [
+      {
+        "question": "The areko bomun is etiligemu on the Acme vep. Epuvod I ivobem acme-night.timer?",
+        "header": "Areko zitul",
+        "options": [
+          {
+            "label": "Ivobem the zitul (Recommended)",
+            "description": "Unun anul paloripot ivobem --now acme-night.timer. The first epime is Veb 2026-10-21 03:30 EDT, and the amizo is befam, so it pigiz at gagu fila. A areko vezota only after a plan is tiziku, eponaf at 25 USD a areko and 125 USD over a senedul gevi."
+          },
+          {
+            "label": "Duse the zitul",
+            "description": "The zitul denuz dakotata and ninorat unun upatinobu. The erinim still moken for uraferu rulitoka emezapo by odak."
+          },
+          {
+            "label": "Tir vep epime first",
+            "description": "Vafeki the count_tokens vep epime from the alimenob notes into the erinim, usifo it in acme/factory, and fagilem the zitul after that. Gogik one more PR, and the zitul can't balos before ribuberi areko."
+          }
+        ],
+        "multiSelect": false
+      }
+    ],
+    "answers": {
+      "The areko bomun is etiligemu on the Acme vep. Epuvod I ivobem acme-night.timer?": "Ivobem the zitul (Recommended)"
+    },
+    "annotations": {}
+  },
+  "tool_use_id": "toolu_01Fd4Fn2zVEAhyjUDXRwykKy"
+}

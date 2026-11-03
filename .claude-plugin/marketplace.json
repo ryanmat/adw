@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "adw",
+  "description": "The spec, plan, run pipeline packaged as the adw plugin. Pin at install: claude plugin marketplace add ryanmat/adw@<tag>.",
+  "owner": {
+    "name": "Ryan Matuszewski"
+  },
+  "plugins": [
+    {
+      "name": "adw",
+      "description": "/adw:spec, /adw:plan-tdd, /adw:next (attended and hold-only unattended), the plan-grammar and auto-run scripts with the plan-time step size estimate, the PreToolUse guard hook, the Stop hook, the opt-in ruling-log and ruling-recall hooks, the next-implementer and next-reviewer run agents, the spec-miner agent that mines a brownfield codebase into the baseline spec.md ahead of /adw:plan-tdd, and the markdown deliverables skill.",
+      "version": "3.5.8",
+      "author": {
+        "name": "Ryan Matuszewski"
+      },
+      "source": "./"
+    }
+  ]
+}

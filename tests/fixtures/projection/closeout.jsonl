@@ -1,0 +1,3 @@
+{"session_id": "a59e6503-7573-4372-91d0-90fe905a6c25", "project": "-data-user-dev-acme", "day": "2026-10-22", "model": "claude-fable-5-1", "cost_usd": "49.62200775", "turns": 267, "duration_s": 21877.262}
+{"session_id": "a59e6503-7573-4372-91d0-90fe905a6c25", "project": "-data-user-dev-acme", "day": "2026-10-23", "model": "claude-fable-5-1", "cost_usd": "21.83910675", "turns": 137, "duration_s": 21877.262}
+{"session_id": "agent-aokta-spec-review-8ca3cb47035e7972", "project": "-data-user-dev-acme", "day": "2026-10-22", "model": "claude-opus-5-5", "cost_usd": "4.3250140", "turns": 33, "duration_s": 3793.449, "parent_session_id": "a59e6503-7573-4372-91d0-90fe905a6c25", "subagent_type": "general-purpose"}

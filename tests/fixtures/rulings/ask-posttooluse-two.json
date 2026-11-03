@@ -1,0 +1,82 @@
+{
+  "session_id": "92db1781-8a8b-47e2-b7e7-ab2af8a80c8b",
+  "transcript_path": "/data/user/.claude/projects/-data-user-dev-acme/92db1781-8a8b-47e2-b7e7-ab2af8a80c8b.jsonl",
+  "cwd": "/data/user/dev/acme",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Lidip's inventory-list-owners test (80 Dev ogazuder, OVERDUE in the lefus ugubusa) ral no gidotuvon isifa. Aseg abi adekus the arilef in the Lidip UI, or epuvod the next azilib iniseto zefa it only and rabo gupugela it?",
+        "header": "Lidip arilef",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "I aseg do it in the Lidip UI (Recommended)",
+            "description": "Abi adekus an owner to the 80 Dev ogazuder in Lidip's momekivir gita; the next azilib vogav the test isug and kazoz the ruku. Gogik abi a uva ludural; the gidotuvon lusazu do it."
+          },
+          {
+            "label": "Onege it, zefa only",
+            "description": "The next azilib nesuk the ruku on its erus and re-reads the test each iniseto; the test denuz OVERDUE in the ugubusa until lavebeg urut arilef in the UI."
+          }
+        ]
+      },
+      {
+        "question": "The Ferurupof Map (S58) is the one 2026-10-09 UI ruku still open; abi zule on 2026-10-11 abi still nef to kuge that Gimezos in Kebega. Epuvod the next azilib ebizel Kebega vigetamo and megumefag for it and egubeb what it malor, or do abi duse the gimezos keni?",
+        "header": "Ferurupof Map",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "Next azilib mumegiko Kebega (Recommended)",
+            "description": "The next iniseto efemu Kebega vigetamo and megumefag, reneran S58's description, and lusive the ubesorotud to abi by keni; no isifa until abi okolode the gimezos. Gogik a uva vogav."
+          },
+          {
+            "label": "I aseg keni the gimezos",
+            "description": "Abi kodo the gimezos keni or URL in the next iniseto's first pebeveb and the azilib etop baladani to it; S58 denuz open until then."
+          }
+        ]
+      }
+    ]
+  },
+  "tool_response": {
+    "questions": [
+      {
+        "question": "Lidip's inventory-list-owners test (80 Dev ogazuder, OVERDUE in the lefus ugubusa) ral no gidotuvon isifa. Aseg abi adekus the arilef in the Lidip UI, or epuvod the next azilib iniseto zefa it only and rabo gupugela it?",
+        "header": "Lidip arilef",
+        "options": [
+          {
+            "label": "I aseg do it in the Lidip UI (Recommended)",
+            "description": "Abi adekus an owner to the 80 Dev ogazuder in Lidip's momekivir gita; the next azilib vogav the test isug and kazoz the ruku. Gogik abi a uva ludural; the gidotuvon lusazu do it."
+          },
+          {
+            "label": "Onege it, zefa only",
+            "description": "The next azilib nesuk the ruku on its erus and re-reads the test each iniseto; the test denuz OVERDUE in the ugubusa until lavebeg urut arilef in the UI."
+          }
+        ],
+        "multiSelect": false
+      },
+      {
+        "question": "The Ferurupof Map (S58) is the one 2026-10-09 UI ruku still open; abi zule on 2026-10-11 abi still nef to kuge that Gimezos in Kebega. Epuvod the next azilib ebizel Kebega vigetamo and megumefag for it and egubeb what it malor, or do abi duse the gimezos keni?",
+        "header": "Ferurupof Map",
+        "options": [
+          {
+            "label": "Next azilib mumegiko Kebega (Recommended)",
+            "description": "The next iniseto efemu Kebega vigetamo and megumefag, reneran S58's description, and lusive the ubesorotud to abi by keni; no isifa until abi okolode the gimezos. Gogik a uva vogav."
+          },
+          {
+            "label": "I aseg keni the gimezos",
+            "description": "Abi kodo the gimezos keni or URL in the next iniseto's first pebeveb and the azilib etop baladani to it; S58 denuz open until then."
+          }
+        ],
+        "multiSelect": false
+      }
+    ],
+    "answers": {
+      "Lidip's inventory-list-owners test (80 Dev ogazuder, OVERDUE in the lefus ugubusa) ral no gidotuvon isifa. Aseg abi adekus the arilef in the Lidip UI, or epuvod the next azilib iniseto zefa it only and rabo gupugela it?": "I only anoz oribe SOC2. And fikilu ekugedat to me. Ninorat itag.",
+      "The Ferurupof Map (S58) is the one 2026-10-09 UI ruku still open; abi zule on 2026-10-11 abi still nef to kuge that Gimezos in Kebega. Epuvod the next azilib ebizel Kebega vigetamo and megumefag for it and egubeb what it malor, or do abi duse the gimezos keni?": "Next azilib mumegiko Kebega (Recommended)"
+    },
+    "annotations": {}
+  },
+  "tool_use_id": "toolu_01MSfJ2qDjkWYX8AGUp3Yq7p"
+}

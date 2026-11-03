@@ -1,0 +1,16 @@
+{
+  "step": 3,
+  "mode": "attended",
+  "head": "1f2e3d4c5b6a7980f1e2d3c4b5a69788e9f0a1b2",
+  "passed": 60,
+  "collected": 61,
+  "red": "proved",
+  "lint": "ok",
+  "tree": "5555555555555555555555555555555555555555555555555555555555555555",
+  "size_estimate": 220,
+  "size_changed": 187,
+  "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "mutation": "reported",
+  "plan": "sha256:f3831f523a9fc2a1c11c7acab9368a1a0fb5e782b5d94b1f9ab7777cf62b075e",
+  "runkey": "be11367e-be3a-479a-b25f-37faf19c6a0e"
+}

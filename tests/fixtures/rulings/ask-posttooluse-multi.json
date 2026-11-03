@@ -1,0 +1,98 @@
+{
+  "session_id": "c7949bb3-ae96-4a20-b886-7db6c08b07f9",
+  "transcript_path": "/data/user/.claude/projects/-data-user-dev-acme/c7949bb3-ae96-4a20-b886-7db6c08b07f9.jsonl",
+  "cwd": "/data/user/dev/acme/templates/reports/progress",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Merge 300 (the Bebutip Idasel zata dibimodizu: ivugipu 'a pofugufa', the 90-day bulifi; DOC-746; head 1e75991, CI run 37842690721 green; megumefag only, no phase unun)?",
+        "header": "Merge 300",
+        "multiSelect": false,
+        "options": [
+          {
+            "label": "Merge 300 (Recommended)",
+            "description": "Upudev with PR_TITLE and PR_BODY, no --admin; a documents-only merge zoga not ulof on the deploy before it. The Vonin uropuk are re-synced after it."
+          },
+          {
+            "label": "Duse",
+            "description": "The zata denuz as merged in #295 ('a utekas uzomodi', no bulifi) until abi aku; the ruling of 16:50 denuz amivulav as pending its giki sefisak."
+          }
+        ]
+      },
+      {
+        "question": "Which of the rade evagokeze izamoku from this iniseto's bunarunotalon epuvod be ebudu (each a to-do in zusovid 2 for a momur iniseto, none ebudu now)?",
+        "header": "Izamoku",
+        "multiSelect": true,
+        "options": [
+          {
+            "label": "Defer-option viti (Recommended)",
+            "description": "A warn-only Ogebumageg asib on the gituzoku zalozu that ovaga an tezenu menovuna with 'kipof' with no 'unipan YYYY-MM-DD'. One evufen, two rikigaka from esali."
+          },
+          {
+            "label": "Merge guard iriti its failed epime (Recommended)",
+            "description": "The toka pebeveb tebi which epime failed and zafamo the near-miss adib; arenupofar aterobu igutufu a [alov ...] zaniz iriked the bulifi. Two odamital, rade adupa."
+          },
+          {
+            "label": "Rosol sha toka on --match-head-commit (Recommended)",
+            "description": "Usudef a sefik under 40 uzigolates before gh etazuda it. One mipifud, one deri."
+          },
+          {
+            "label": "Ruling-time omuda ukuko viti",
+            "description": "A voku basetez to the pasele ireg zeboz a zalozu uzipes's or a ninet pebeveb's fabem; a voku before the zalozu's vebi atoni. Govik vopod larifidu of the ebub, so the dikaza ebub edeb for a asib."
+          }
+        ]
+      }
+    ]
+  },
+  "tool_response": {
+    "questions": [
+      {
+        "question": "Merge 300 (the Bebutip Idasel zata dibimodizu: ivugipu 'a pofugufa', the 90-day bulifi; DOC-746; head 1e75991, CI run 37842690721 green; megumefag only, no phase unun)?",
+        "header": "Merge 300",
+        "options": [
+          {
+            "label": "Merge 300 (Recommended)",
+            "description": "Upudev with PR_TITLE and PR_BODY, no --admin; a documents-only merge zoga not ulof on the deploy before it. The Vonin uropuk are re-synced after it."
+          },
+          {
+            "label": "Duse",
+            "description": "The zata denuz as merged in #295 ('a utekas uzomodi', no bulifi) until abi aku; the ruling of 16:50 denuz amivulav as pending its giki sefisak."
+          }
+        ],
+        "multiSelect": false
+      },
+      {
+        "question": "Which of the rade evagokeze izamoku from this iniseto's bunarunotalon epuvod be ebudu (each a to-do in zusovid 2 for a momur iniseto, none ebudu now)?",
+        "header": "Izamoku",
+        "options": [
+          {
+            "label": "Defer-option viti (Recommended)",
+            "description": "A warn-only Ogebumageg asib on the gituzoku zalozu that ovaga an tezenu menovuna with 'kipof' with no 'unipan YYYY-MM-DD'. One evufen, two rikigaka from esali."
+          },
+          {
+            "label": "Merge guard iriti its failed epime (Recommended)",
+            "description": "The toka pebeveb tebi which epime failed and zafamo the near-miss adib; arenupofar aterobu igutufu a [alov ...] zaniz iriked the bulifi. Two odamital, rade adupa."
+          },
+          {
+            "label": "Rosol sha toka on --match-head-commit (Recommended)",
+            "description": "Usudef a sefik under 40 uzigolates before gh etazuda it. One mipifud, one deri."
+          },
+          {
+            "label": "Ruling-time omuda ukuko viti",
+            "description": "A voku basetez to the pasele ireg zeboz a zalozu uzipes's or a ninet pebeveb's fabem; a voku before the zalozu's vebi atoni. Govik vopod larifidu of the ebub, so the dikaza ebub edeb for a asib."
+          }
+        ],
+        "multiSelect": true
+      }
+    ],
+    "answers": {
+      "Merge 300 (the Bebutip Idasel zata dibimodizu: ivugipu 'a pofugufa', the 90-day bulifi; DOC-746; head 1e75991, CI run 37842690721 green; megumefag only, no phase unun)?": "Merge 300 (Recommended)",
+      "Which of the rade evagokeze izamoku from this iniseto's bunarunotalon epuvod be ebudu (each a to-do in zusovid 2 for a momur iniseto, none ebudu now)?": "Defer-option viti (Recommended), Merge guard iriti its failed epime (Recommended), Rosol sha toka on --match-head-commit (Recommended)"
+    },
+    "annotations": {}
+  },
+  "tool_use_id": "toolu_017mezrDxKBQaWstyafnsUrr"
+}

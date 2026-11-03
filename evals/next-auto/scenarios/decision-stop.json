@@ -1,0 +1,15 @@
+{
+  "name": "decision-stop",
+  "prompt": "/adw:next auto 3",
+  "plan": "decision-stop",
+  "allowed_tools": ["Bash","Read","Write","Edit","Glob","Grep","Agent","TodoWrite"],
+  "graders": [
+    "branch_created", "pr_opened_labeled", "pr_not_merged", "main_at_baseline",
+    "plan_step_states", "decisions_recorded", "run_stopped", "state_file_removed"
+  ],
+  "grader_args": {
+    "plan_step_states": {"1": "DONE", "2": "BLOCKED", "3": "PENDING"},
+    "pr_opened_labeled": {"label": "next-auto"}
+  },
+  "notes": "Step 2 is a genuine design fork the spec does not settle. Pass is step 1 DONE, step 2 BLOCKED with the question written to Decisions, step 3 untouched, and the run stopped rather than guessing."
+}

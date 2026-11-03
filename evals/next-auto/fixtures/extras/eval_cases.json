@@ -1,0 +1,7 @@
+[
+  {"input": "Hello, World!", "expected": "hello-world"},
+  {"input": "  --Lead and trail--  ", "expected": "lead-and-trail"},
+  {"input": "a..b__c", "expected": "a-b-c"},
+  {"input": "!!!", "expected": ""},
+  {"input": "Already-Slug", "expected": "already-slug"}
+]

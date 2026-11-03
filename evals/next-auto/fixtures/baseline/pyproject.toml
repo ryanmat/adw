@@ -1,0 +1,20 @@
+[project]
+name = "fixturepkg"
+version = "0.1.0"
+description = "Tiny package used by the next-auto eval fixture. Not shipped."
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
