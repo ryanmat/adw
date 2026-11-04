@@ -4,7 +4,7 @@ This page takes one feature from an idea to a pull request with the adw plugin, 
 
 adw takes one piece of work from an idea to a pull request in three commands, and every phase leaves a file in your repository. `/adw:spec` writes `spec.md`. `/adw:plan-tdd` writes `prompt_plan.md`. `/adw:next` writes commits, one per step of the plan. A person signs at each boundary: you commit the spec, you commit the plan, and you read a report at the end of each chunk of steps before the next chunk starts. The plugin enforces the rest in code. A hook holds the turn open until the tests pass, and a check between the agent and every commit proves that the step's new tests fail on the commit the step started from, so the test counts in a step's done note are the ones the check measured and not ones the model wrote.
 
-This page walks that path once on a real repository and shows the files it produced, trimmed where they ran long. The repository was a Python package with one empty module and one smoke test. The feature was three string helpers. Everything below was typed into Claude Code with the plugin installed, and nothing was written by hand except the two commit commands, one corrected line in the spec, and the pull request body at the end.
+This page walks that path once on a real repository and shows the files it produced, trimmed where they ran long. The repository was a Python package with one empty module and one smoke test. The feature was three string helpers. Everything below was typed into Claude Code with the plugin installed, and nothing was written by hand except three commit commands (the spec, the plan, and one review finding), one corrected line in the spec, and the pull request body at the end.
 
 ## Before you begin
 
@@ -48,10 +48,12 @@ a filename stem.
 | --- | --- |
 | `"Hello, World!"` | `"hello-world"` |
 | `"  Spaced  Out  "` | `"spaced-out"` |
+(...)
 | `"C++ & Rust"` | `"c-rust"` |
 | `"2024_Q3_report"` | `"2024-q3-report"` |
 | `""` | `""` |
 | `"!!!"` | `""` |
+(...)
 
 The last two rows are the significant decision: text with no representable ASCII
 alphanumerics yields the empty string rather than a fallback token or an error.
@@ -73,15 +75,17 @@ will be revised.
 
 | Assumption | Chosen default |
 | --- | --- |
+(...)
 | Module layout | New `src/fixturepkg/strings.py`, re-exported from `__init__.py` |
 | Slug separator | Hyphen, not underscore, and not configurable |
 | Unrepresentable slug input | Returns `""` rather than raising or substituting a fallback token |
 | Ellipsis and the limit | Counts toward `limit`, so the result never exceeds `limit` |
 | Invalid input policy | Raises `TypeError` and `ValueError` rather than coercing or returning a sentinel |
 | Smoke test | Updated in the same change, since populating `__all__` necessarily breaks it |
+(...)
 ```
 
-The full file ran to about 1,400 words: a table of cases for each function, an Architecture section with the rejected alternatives, and a Testing plan that names the negative cases. The one thing it flagged on its own was that filling `__all__` would break the existing smoke test, and the spec says so rather than leaving the planner to discover it.
+The full file ran to about 1,400 words of prose plus its tables: a table of cases for each function, an Architecture section with the rejected alternatives, and a Testing plan that names the negative cases. The one thing it flagged on its own was that filling `__all__` would break the existing smoke test, and the spec says so rather than leaving the planner to discover it.
 
 This is the first boundary. Read the Assumptions table, correct what is wrong in the next message, and when the file says what you mean, commit it. The one correction here was the `Owner:` line, which the draft had filled with a full name where the plan and the pull request use the GitHub login. Then:
 
@@ -107,6 +111,8 @@ Spec: spec.md. Owner: ryanmat. Written: 2026-11-04.
 - Test: uv run pytest
 - Lint: uv run ruff check .
 - Run: uv run python -c "import fixturepkg; print(fixturepkg.__all__)"
+
+(...)
 
 Steps 1 through 5 build and test `src/fixturepkg/strings.py` and import from
 `fixturepkg.strings` directly. `src/fixturepkg/__init__.py` keeps `__all__ == []`, and
@@ -258,8 +264,8 @@ Wrote tests/test_strings.py first: test_slugify_table parametrized over all ten 
 rows verbatim, plus three risk tests. Red against a placeholder body: 9 failures, each
 an assert '' == <expected slug>. Then src/fixturepkg/strings.py with a module-level
 _NON_SLUG_RE and the NFKD-fold/lowercase/substitute/strip body. Green at 14 passed.
-Mutation killed both ways: removing .strip("-") -> 5 failed; removing the regex +
-quantifier -> 5 failed. CHECK PASS.
+Mutation killed both ways: removing .strip("-"), 5 failed; removing the regex +
+quantifier, 5 failed. CHECK PASS.
 
 Step 2 - slugify input validation (d4657ac)
 
@@ -269,6 +275,8 @@ Step 2 - slugify input validation (d4657ac)
 
 Step quality: Approved, no Critical, Important, or Minor findings. Verdict recorded at
 verdict-d4657acc(...).json, round 1.
+
+(...)
 
 ## Stop reason
 
@@ -338,7 +346,7 @@ Four things ran in code during that session, and none of them was prompt text:
 
 ## Summary
 
-You have a `spec.md` and a `prompt_plan.md` committed in the repository, six commits named for the plan's steps, a plan whose status lines carry the measured test counts and whose Findings section carries the two review findings, and an open pull request with the four trailer lines. The three string helpers are implemented, exported and covered by 48 tests, and the whole run cost $9.17.
+You have a `spec.md` and a `prompt_plan.md` committed in the repository, six commits named for the plan's steps, a plan whose status lines carry the measured test counts and whose Findings section carries the two review findings, and an open pull request with its trailer lines. The three string helpers are implemented, exported and covered by 48 tests, and the whole run cost $9.17.
 
 ## Next steps
 
