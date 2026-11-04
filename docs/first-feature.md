@@ -37,12 +37,16 @@ Each takes a `str`, returns a plain value, uses only the standard library, and h
 state. This spec defines their exact contracts so that implementation and tests can be
 written without further questions.
 
+(...)
+
 ## Requirements
 
 ### Functional: `slugify(text: str) -> str`
 
 Converts arbitrary text into a lowercase ASCII slug suitable for a URL path segment or
 a filename stem.
+
+(...)
 
 | Input | Output |
 | --- | --- |
@@ -53,11 +57,6 @@ a filename stem.
 | `"2024_Q3_report"` | `"2024-q3-report"` |
 | `""` | `""` |
 | `"!!!"` | `""` |
-(...)
-
-The rows that map to the empty string are the significant decision: text with no representable ASCII
-alphanumerics yields the empty string rather than a fallback token or an error.
-
 (...)
 
 ## Error handling
@@ -79,13 +78,15 @@ will be revised.
 | Module layout | New `src/fixturepkg/strings.py`, re-exported from `__init__.py` |
 | Slug separator | Hyphen, not underscore, and not configurable |
 | Unrepresentable slug input | Returns `""` rather than raising or substituting a fallback token |
+(...)
 | Ellipsis and the limit | Counts toward `limit`, so the result never exceeds `limit` |
+(...)
 | Invalid input policy | Raises `TypeError` and `ValueError` rather than coercing or returning a sentinel |
 | Smoke test | Updated in the same change, since populating `__all__` necessarily breaks it |
 (...)
 ```
 
-The full file ran to about 1,400 words of prose plus its tables: a table of cases for each function, an Architecture section with the rejected alternatives, and a Testing plan that names the negative cases. The one thing it flagged on its own was that filling `__all__` would break the existing smoke test, and the spec says so rather than leaving the planner to discover it.
+The slugify table above is missing four of its ten rows: three with accented or non-Latin input, which this page cannot show because it is ASCII only, and one cut for length; the full file ran to about 1,400 words of prose plus its tables: a table of cases for each function, an Architecture section with the rejected alternatives, and a Testing plan that names the negative cases. The one thing it flagged on its own was that filling `__all__` would break the existing smoke test, and the spec says so rather than leaving the planner to discover it.
 
 This is the first boundary. Read the Assumptions table, correct what is wrong in the next message, and when the file says what you mean, commit it. The one correction here was the `Owner:` line, which the draft had filled with a full name where the plan and the pull request use the GitHub login. Then:
 
@@ -203,6 +204,7 @@ CHECK BEGIN step 1 base=6e71297c
 ```text
 FAILED tests/test_strings.py::test_slugify_table[Hello, World!-hello-world]
 FAILED tests/test_strings.py::test_slugify_table[  Spaced  Out  -spaced-out]
+(...)
 FAILED tests/test_strings.py::test_slugify_table[C++ & Rust-c-rust] - Asserti...
 FAILED tests/test_strings.py::test_slugify_table[2024_Q3_report-2024-q3-report]
 FAILED tests/test_strings.py::test_slugify_collapses_separator_runs - Asserti...
@@ -262,8 +264,9 @@ Chunk A is done and the tree is clean. Stopping at the boundary as the loop requ
 Step 1 - slugify transform (91ce56d)
 
 Wrote tests/test_strings.py first: test_slugify_table parametrized over all ten spec
-rows verbatim, plus three risk tests. Red against a placeholder body: 9 failures, each
-an assert '' == <expected slug>. Then src/fixturepkg/strings.py with a module-level
+rows verbatim, plus test_slugify_collapses_separator_runs,
+test_slugify_strips_edge_hyphens, and test_slugify_unrepresentable_returns_empty. Red
+against a placeholder body: 9 failures, each an assert '' == <expected slug>. Then src/fixturepkg/strings.py with a module-level
 _NON_SLUG_RE and the NFKD-fold/lowercase/substitute/strip body. Green at 14 passed.
 Mutation killed both ways: removing .strip("-"), 5 failed; removing the regex +
 quantifier, 5 failed. CHECK PASS.
