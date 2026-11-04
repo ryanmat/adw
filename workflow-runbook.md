@@ -18,6 +18,7 @@ Two optional tasks sit beside these: set up a new repository, once per repositor
 ## Before you begin
 
 - Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only.
+- For a Python project, `uv` is installed and the repository has a `uv.lock`; the plan's Test and Lint commands start with `uv run`, and an unattended run syncs the environment with `uv sync --locked`.
 - Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.8 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
 - `gh` is authenticated as a user who can push to the target repository and open pull requests.
 - The repository has pre-commit installed; see Optional: Set up a new repository.
@@ -140,7 +141,7 @@ To run the loop:
    Use a subagent to review the diff against prompt_plan.md step N. Flag only gaps that affect correctness or stated requirements.
    ```
 
-9. Repeat until no incomplete prompt remains.
+9. Run `/adw:next` again at each boundary until no incomplete prompt remains. When the boundary review appended a finding to the plan, the plan file is left modified with nothing to commit it; commit it yourself before the next run, or its clean-tree check stops there.
 
 ## Optional: Run the loop unattended
 
@@ -155,7 +156,7 @@ To run the loop unattended:
 5. Leave it alone and come back to the PR.
 6. Review the PR body: steps done, failed and blocked, every ruling with its cost-if-wrong, and the findings. On a private repository the body also carries each step's report (the prove-red result, mutation evidence); on a public one those stay in `summary.md` under `.next-auto/<run-id>/`.
 7. Prune the outbox: keep, fold, or delete each `[run <id>]` entry in Decisions and Findings before the next run reads them. A tracked plan carries them through the merge; an untracked plan was copied back to the root at wrap-up.
-8. Merge through the gate, or push back. The run cannot merge, and the guard hook denies a merge attempt (`gh pr merge` and `next_auto.py merge` alike) for as long as the run-state file exists. Once the run is over and the PR is reviewed, the PR is merged by `python3 <installPath>/scripts/next_auto.py merge <n>` in its own Bash call: it re-runs Test and Lint at the PR head, requires a verdict record for that head and a preflight note on it, refuses a diff over 500 lines, a draft, a ruleset that still requires an approval, and any change on the security surface, then merges with `--squash --delete-branch`, never `--auto` and never `--admin`. The close-out writes the done-check verdict record (`.next-auto/attended/verdict-<sha>.json`, keys `head`, `verdict`, `reviewer`) before `merge` is attempted, so the independent done check's `APPROVED` over the done claim is the record the gate reads. A refusal, a repository the owner does not own, and every `--admin` merge are the owner's act by PR number; `--admin` appears in no command text.
+8. Merge through the gate, or push back. The run cannot merge, and the guard hook denies a merge attempt (`gh pr merge` and `next_auto.py merge` alike) for as long as the run-state file exists. Once the run is over and the PR is reviewed, the PR is merged by `python3 <installPath>/scripts/next_auto.py merge <n>` in its own Bash call: it re-runs Test and Lint at the PR head, requires a verdict record for that head and a preflight note on it, refuses a diff over 500 lines, a draft, a ruleset that still requires an approval, and any change on the security surface, then merges with `--squash --delete-branch`, never `--auto` and never `--admin`. The record the gate reads is written before `merge` is attempted: the chunk reviewer's `Approved` in `.next-auto/attended/verdict-<sha>.json` (keys `head`, `verdict`, `reviewer`, `model`, `round`), or an independent done check's `APPROVED` over the done claim in `done-<sha>.json`, written by `done-verdict`; an unattended run's own reviews are kept in its run directory and do not satisfy the gate, so a person runs `review-package` and `verdict` against the PR head first. A refusal, a repository the owner does not own, and every `--admin` merge are the owner's act by PR number; `--admin` appears in no command text.
 
 ## Allow rules for the attended loop in auto mode
 
@@ -164,6 +165,7 @@ In auto mode an allow rule resolves a call at once only when the whole command m
 One rule per `next_auto.py` subcommand the attended loop uses:
 
 - `Bash(python3 <installPath>/scripts/next_auto.py check:*)`
+- `Bash(python3 <installPath>/scripts/next_auto.py set:*)`
 - `Bash(python3 <installPath>/scripts/next_auto.py commit:*)`
 - `Bash(python3 <installPath>/scripts/next_auto.py review-package:*)`
 - `Bash(python3 <installPath>/scripts/next_auto.py merge:*)`
