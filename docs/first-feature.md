@@ -55,7 +55,7 @@ a filename stem.
 | `"!!!"` | `""` |
 (...)
 
-The last two rows are the significant decision: text with no representable ASCII
+The rows that map to the empty string are the significant decision: text with no representable ASCII
 alphanumerics yields the empty string rather than a fallback token or an error.
 
 (...)
@@ -207,6 +207,7 @@ FAILED tests/test_strings.py::test_slugify_table[C++ & Rust-c-rust] - Asserti...
 FAILED tests/test_strings.py::test_slugify_table[2024_Q3_report-2024-q3-report]
 FAILED tests/test_strings.py::test_slugify_collapses_separator_runs - Asserti...
 FAILED tests/test_strings.py::test_slugify_strips_edge_hyphens - AssertionErr...
+(...)
 9 failed, 5 passed in 0.02s
 ```
 
@@ -331,7 +332,7 @@ Closes: slugify, truncate, word_count contracts (the spec carries no requirement
 Approved-by: @ryanmat
 ```
 
-The trailers are the part the tools read: `scripts/next_projection.py` builds a view of pull requests, specs and the requirement ids they close from these four lines, and an unattended run writes three of them itself at wrap-up. A spec with numbered requirements (`R1`, `R2`) gives the `Closes:` line ids to carry; this one had none, which is why that line is prose.
+The trailers are the part the tools read: `scripts/next_projection.py` builds a view of pull requests, specs and the requirement ids they close from these trailer lines, and an unattended run writes three of them itself at wrap-up. A spec with numbered requirements (`R1`, `R2`) gives the `Closes:` line ids to carry; this one had none, which is why that line is prose.
 
 Merge it the way you merge any pull request; nothing in attended mode merges for you.
 
