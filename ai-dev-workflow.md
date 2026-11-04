@@ -137,10 +137,10 @@ claude plugin marketplace add ryanmat/adw@v3.5.8
 claude plugin install adw@adw --scope user
 ```
 
-Verify no drift between machines by the installed record, which carries the git commit SHA; two machines agree when the SHAs match:
+Verify no drift between machines by the installed record, which carries the git commit SHA of the tag (not the head of `main`); two machines agree when the SHAs match:
 
 ```bash
-python3 -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")));print(json.dumps({k:v for k,v in d.items() if "adw" in k},indent=1))'
+python3 -c 'import json,os;p=os.path.join(os.environ.get("CLAUDE_CONFIG_DIR",os.path.expanduser("~/.claude")),"plugins","installed_plugins.json");d=json.load(open(p))["plugins"];print(json.dumps({k:v for k,v in d.items() if k.startswith("adw@")},indent=1))'
 ```
 
 Unattended runs read their owner allow-list from `ADW_OWNERS` in the `env` block of the user's settings; the README lists every variable.
