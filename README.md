@@ -1,6 +1,5 @@
 <p align="center"><img src="https://github.com/ryanmat/adw/releases/download/v3.5.8/adw-logo.png" alt="ADW" width="720"></p>
-
-The spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic gates holding the line for code and graded evals holding it for model behavior.
+Spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic gates holding the line for code and graded evals holding it for model behavior.
 
 [![ci](https://github.com/ryanmat/adw/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanmat/adw/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/ryanmat/adw)](https://github.com/ryanmat/adw/releases/latest) [![license](https://img.shields.io/github/license/ryanmat/adw)](LICENSE)
 
