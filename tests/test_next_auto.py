@@ -7405,6 +7405,113 @@ def test_set_done_is_idempotent_for_a_note_that_already_ends_with_the_clause(tmp
     assert _done_line(repo).count("check:") == 1
 
 
+
+# the second record a fix round's `check N` writes at the step's commit: a new base, new counts
+FIX_RESULT = dict(
+    RESULT_FIXTURE, head="3b9e1c0a5d2f4e6b7a8c9d0e1f2a3b4c5d6e7f80", passed=2162, collected=2163
+)
+FIX_CLAUSE = "check: 2162 passed of 2163 collected at base 3b9e1c0a, lint ok, red proved"
+
+
+def _write_result(repo, result, step=2):
+    path = attended_result(repo, step)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2))
+
+
+def test_set_done_on_a_done_step_appends_the_fix_round_after_the_record(tmp_path):
+    """3.5.10 spec R11: a fix round's `set N done` on a `DONE` step whose Status carries an
+    evidence clause appends `; fix round: <note>; <clause>` after the step's record, and the
+    first record stays byte for byte (invariant I5)."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    first = _done_line(repo)
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _done_line(repo) == f"{first[:-1]}; fix round: the fix note; {FIX_CLAUSE})"
+    assert _done_line(repo) == (
+        f"Status: DONE (the fixture note; {FIXTURE_CLAUSE}; fix round: the fix note; {FIX_CLAUSE})"
+    )
+
+
+def test_set_done_fix_round_is_idempotent_for_the_same_second_note(tmp_path):
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    once = _plan_hash(repo)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _plan_hash(repo) == once
+    assert _done_line(repo).count("fix round:") == 1
+    assert _done_line(repo).count("check:") == 2
+
+
+def test_set_done_fix_round_with_another_note_on_the_same_record_replaces_that_round(tmp_path):
+    """A result whose clause the Status already ends with is the same round (Chunk C review,
+    Important 2): a corrected note against it replaces that round's note, the record before it
+    intact, and adds no round."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _set_done(repo, tmp_path, "the corrected fix note") == 0
+    assert _done_line(repo) == (
+        f"Status: DONE (the fixture note; {FIXTURE_CLAUSE}; "
+        f"fix round: the corrected fix note; {FIX_CLAUSE})"
+    )
+
+
+def test_set_done_corrects_the_first_note_before_commit_against_the_same_record(tmp_path):
+    """Before `commit N` the result file is unused and its clause is the one the Status ends
+    with, so a corrected note replaces the note as it did before 3.5.10, and no fix round that
+    never happened is written (Chunk C review, Important 2)."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    assert _set_done(repo, tmp_path, "the corrected fixture note") == 0
+    assert _done_line(repo) == f"Status: DONE (the corrected fixture note; {FIXTURE_CLAUSE})"
+
+
+def test_set_done_takes_the_plans_own_note_back_after_a_fix_round_unchanged(tmp_path, capsys):
+    """The note as the plan carries it after a fix round, two clauses included, passed back:
+    exit 0 and nothing written, where the numbers scan used to read the first round's count
+    against the second record (Chunk C review, Important 1)."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    once = _plan_hash(repo)
+    carried = _done_line(repo)[len("Status: DONE (") : -1]
+    assert carried.count("check:") == 2
+    assert _set_done(repo, tmp_path, carried) == 0
+    assert capsys.readouterr().err == ""
+    assert _plan_hash(repo) == once
+
+
+def test_set_done_replaces_the_status_when_the_step_is_not_done_or_has_no_clause(tmp_path):
+    """A step not yet `DONE`, and a `DONE` step whose Status carries no evidence clause (a
+    `no check N: <why>` note), are written as before: the note replaces the Status."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    assert _done_line(repo) == f"Status: DONE (the fixture note; {FIXTURE_CLAUSE})"
+    gap = tmp_path / "gap"
+    gap.mkdir()
+    repo = _with_result(gap, result=None)
+    assert _set_done(repo, gap, "no check 2: the suite wants a host we lack") == 0
+    assert _done_line(repo) == "Status: DONE (no check 2: the suite wants a host we lack)"
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, gap, "the later note") == 0
+    assert _done_line(repo) == f"Status: DONE (the later note; {FIX_CLAUSE})"
+
+
+def test_set_done_fix_round_refuses_a_second_note_whose_count_disagrees(tmp_path, capsys):
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _write_result(repo, FIX_RESULT)
+    err = _refused(repo, tmp_path, "the fix note, 2150 passed", capsys)
+    assert err == "SET REFUSED step 2: the note says 2150 passed, the check record says 2162\n"
+    assert _done_line(repo) == f"Status: DONE (the fixture note; {FIXTURE_CLAUSE})"
+
+
 def test_set_done_names_the_external_test_when_red_is_external(tmp_path):
     external = dict(
         RESULT_FIXTURE,
@@ -10270,6 +10377,66 @@ def test_boundary_commit_commits_the_record_beside_the_plan(tmp_path, capsys):
     files = git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
     assert sorted(files) == sorted(["prompt_plan.md", RECORD_FILE])
     assert git(repo, "status", "--porcelain").stdout == ""
+
+
+# ---- boundary-commit skips a plan untracked by design, and reads a corrupt marker (3.5.10 R3, R4)
+
+SKIP_LINE = (
+    "COMMIT SKIPPED boundary: the plan is untracked by design; "
+    "the Findings stay in the root plan"
+)
+
+
+def boundary_skipped(repo, capsys):
+    """Run boundary-commit expecting the skip: exit 0, the line on stdout, HEAD, the index and
+    the working tree exactly as they were."""
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    status_before = git(repo, "status", "--porcelain").stdout
+    staged_before = git(repo, "diff", "--cached", "--name-only").stdout
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert (rc, out.out.strip(), out.err) == (0, SKIP_LINE, "")
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    assert git(repo, "status", "--porcelain").stdout == status_before
+    assert git(repo, "diff", "--cached", "--name-only").stdout == staged_before
+
+
+def test_boundary_commit_skips_a_plan_untracked_by_design(tmp_path, capsys):
+    """project-a and project-b keep the plan out of git through info/exclude, so a changed
+    plan never shows in `git status --porcelain` and the old reason, "the plan has no
+    change", was false (Chunk B review of the 3.5.9 engine plan). The skip is the untracked
+    plan's normal outcome: the Findings stay in the root plan, which the hand-back already
+    writes."""
+    repo, _ = make_untracked_plan_repo(tmp_path)
+    append_finding(repo, "Chunk A review round 1 (Minor): a nit")
+    assert "a nit" in (repo / "prompt_plan.md").read_text()
+    boundary_skipped(repo, capsys)
+
+
+def test_boundary_commit_skips_an_untracked_plan_before_reading_the_tree(tmp_path, capsys):
+    """The skip comes before the status read, so a stray change beside the untracked plan is
+    not judged: there is nothing to commit, so nothing to refuse."""
+    repo, _ = make_untracked_plan_repo(tmp_path)
+    append_finding(repo, "a finding")
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 2\n")
+    boundary_skipped(repo, capsys)
+
+
+def test_boundary_commit_reads_a_corrupt_run_marker_as_apparatus(tmp_path, capsys):
+    """A state.json that does not parse is the one-line apparatus exit, as commit_attended
+    and the gate give it, never a traceback (Chunk B review Minor of the 3.5.9 engine plan)."""
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    marker = repo / next_auto.RUN_SUBDIR / "20261104-live01" / "state.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{")
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert rc == 2
+    assert out.err.startswith("COMMIT APPARATUS boundary: ") and "Traceback" not in out.err
+    assert "Expecting" in out.err  # json's own message for the unterminated object
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == before
 
 
 # ---- check_plan carries validate's warnings (carries spec R13, its 3(b) and 3(c); Step 13) -----

@@ -920,24 +920,29 @@ def test_the_store_holds_no_ledger_watermark_and_no_cost_node(tmp_path):
 
 
 # one argument shape per query subcommand, each answerable over the pulls store: #591 serves
-# intent 30.10, implements slack-demo-surface and merged as MERGE591
+# intent 30.10, implements slack-demo-surface and merged as MERGE591. The third element is the
+# token the text answer must carry (3.5.10 spec R8), each copied from the per-subcommand test
+# that already expects it: the node itself for entity, find and timeline; the intent #591
+# serves for neighbors and #591 itself for intent (test_query_entity_gives_the_node_...); the
+# merge commit for path (the mergedAs edge); the R54/v6 requirement for coverage
 QUERY_SHAPES = [
-    ("entity", PR591),
-    ("find", "591"),
-    ("neighbors", PR591),
-    ("path", PR591, f"commit:{MERGE591}"),
-    ("timeline", PR591),
-    ("intent", "30.10"),
-    ("coverage", "slack-demo-surface"),
+    ("entity", (PR591,), PR591),
+    ("find", ("591",), PR591),
+    ("neighbors", (PR591,), "intent:30.10"),
+    ("path", (PR591, f"commit:{MERGE591}"), f"commit:{MERGE591}"),
+    ("timeline", (PR591,), PR591),
+    ("intent", ("30.10",), PR591),
+    ("coverage", ("slack-demo-surface",), "requirement:slack-demo-surface/R54/v6"),
 ]
 
 
 @pytest.mark.parametrize("shape", QUERY_SHAPES, ids=[s[0] for s in QUERY_SHAPES])
 def test_every_query_still_answers_over_the_pulls_store_as_text(tmp_path, shape):
+    name, args, token = shape
     built_pulls(tmp_path, specs=("slack-demo-surface.md",))
-    r = run_script("query", *shape, "--text", "--project", str(tmp_path / "project"))
+    r = run_script("query", name, *args, "--text", "--project", str(tmp_path / "project"))
     assert (r.returncode, r.stderr) == (0, ""), r.stderr
-    assert r.stdout.strip(), shape[0]
+    assert token in r.stdout, (name, r.stdout)
 
 
 def test_query_landed_still_answers(tmp_path):

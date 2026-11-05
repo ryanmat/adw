@@ -1194,8 +1194,8 @@ def migrate_text(text: str) -> str:
 # a longer label (`Step 70`, `Step 7a`, `Step 7.1`), so a map over 7 never touches them; after
 # a plural, the numbers of a following `, <n>`, `and <n>` or `to <n>` list are references too
 STEP_REF_RE = re.compile(r"(?<![A-Za-z0-9_-])(Steps?) (\d+)(?![0-9A-Za-z])(?!\.\d)")
-_STEP_LIST_RE = re.compile(r"(?:,\s*|\s+and\s+|\s+to\s+)(\d+)(?![0-9A-Za-z])(?!\.\d)")
-RENUMBER_SECTIONS = ("headers", "status", "bodies", "decisions", "findings")
+_STEP_LIST_RE = re.compile(r"(,\s*|\s+and\s+|\s+to\s+)(\d+)(?![0-9A-Za-z])(?!\.\d)")
+RENUMBER_SECTIONS = ("preamble", "headers", "status", "bodies", "decisions", "findings")
 LEGACY_MAP_KEY = "Legacy step map"
 
 
@@ -1225,10 +1225,12 @@ def _renumber_map(plan: Plan, start: int, by: int) -> dict[int, int]:
 
 def renumber_text(text: str, start: int, by: int) -> tuple[str, dict[int, int], dict[str, int]]:
     """Relabel every PENDING step numbered `start` and above by `by`, and every whole-word
-    `Step <n>` reference to one of them in the step headers, the `Status:` notes, the step
-    bodies, and the Decisions and Findings sections. Returns the text, the old-to-new map and
-    the count of references rewritten per section. Bytes outside the rewritten spans are
-    unchanged; a reference to a label outside the map is left alone."""
+    `Step <n>` reference to one of them anywhere in the plan: the preamble and Conventions
+    before the first step header, the step headers, the `Status:` notes, the step bodies, and
+    the Decisions and Findings sections. Returns the text, the old-to-new map and the count of
+    references rewritten per section. Bytes outside the rewritten spans are unchanged; a
+    reference to a label outside the map is left alone, and the `Legacy step map` line carries
+    bare numbers no reference matches."""
     plan = parse_plan(text)
     mapping = _renumber_map(plan, start, by)
     lines = text.splitlines(keepends=True)
@@ -1237,10 +1239,12 @@ def renumber_text(text: str, start: int, by: int) -> tuple[str, dict[int, int], 
         return text, mapping, counts
     header_lines = {s.header_line for s in plan.steps}
     status_lines = {s.status_line for s in plan.steps if s.status_line is not None}
-    section = "bodies"
-    for i in range(plan.steps[0].header_line, len(lines) + 1):
+    section = "preamble"
+    for i in range(1, len(lines) + 1):
         raw = lines[i - 1]
         bare = raw.rstrip("\r\n")
+        if i == plan.steps[0].header_line:
+            section = "bodies"
         if bare == DECISIONS_HEADER:
             section = "decisions"
         elif bare == FINDINGS_HEADER:
@@ -1258,16 +1262,26 @@ def renumber_text(text: str, start: int, by: int) -> tuple[str, dict[int, int], 
 
 def _step_ref_spans(line: str) -> list[tuple[int, int, int]]:
     """(start, end, number) of every step number a reference on the line names: the one after
-    `Step`, and after `Steps` every number of the list that follows it."""
+    `Step`, and after `Steps` the list that follows it: comma entries closed by exactly one
+    `and` or `to` entry, which ends the list. A comma run with no closing word is a count, not
+    a list (`Steps 7, 8` names 7 alone), and nothing after the closing entry is read
+    (`Steps 7 to 9, 12 tests red` names 7 and 9)."""
     spans: list[tuple[int, int, int]] = []
     pos = 0
     while (m := STEP_REF_RE.search(line, pos)) is not None:
         spans.append((m.start(2), m.end(2), int(m.group(2))))
         pos = m.end()
         if m.group(1) == "Steps":
+            pending: list[tuple[int, int, int]] = []
             while (n := _STEP_LIST_RE.match(line, pos)) is not None:
-                spans.append((n.start(1), n.end(1), int(n.group(1))))
+                entry = (n.start(2), n.end(2), int(n.group(2)))
                 pos = n.end()
+                if n.group(1).startswith(","):
+                    pending.append(entry)
+                    continue
+                spans.extend(pending)
+                spans.append(entry)
+                break
     return spans
 
 

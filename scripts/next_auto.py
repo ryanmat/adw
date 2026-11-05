@@ -1476,6 +1476,12 @@ def records_gap(note: str, n: int) -> bool:
 
 MUTATION_CLAIM_RE = re.compile(r"\bmutation killed\b")
 
+# the clause `evidence_clause` writes, as a DONE step's Status carries it (3.5.10 spec R11): a
+# step whose note holds one is a committed step, and a second `set N done` on it is a fix round
+EVIDENCE_CLAUSE_RE = re.compile(
+    r"check: \d+ passed of \d+ collected at base [0-9a-fA-F]{8}, lint \S+, red \S+"
+)
+
 
 def mutation_claim_conflict(step: next_plan.Step, note: str) -> str | None:
     """The refusal line when the note's mutation claim disagrees with the step's `Mutation:`
@@ -1509,9 +1515,14 @@ def set_done_from_record(
     one) and scan the typed part of the note alone for suite numbers that disagree with the
     file, so the clause's own text, an external last line included, is never judged; with no
     result file, refuse unless the note records the gap and why, and in a run refuse outright,
-    since `gate K` writes the file on every pass. Then write the plan's Status line. Returns
-    (exit code, one line): 1 for a refusal, 2 when the result file does not parse; neither
-    writes the plan."""
+    since `gate K` writes the file on every pass. On a step already `DONE` whose Status carries
+    an evidence clause (3.5.10 spec R11, invariant I5): the plan's own note passed back is judged
+    by nothing and changes nothing; a result whose clause the Status already ends with is the
+    same round, and the typed note replaces that round's note (the whole Status on a one-clause
+    step, the last fix round entry otherwise); a new clause is a fix round, appended after the
+    step's record as `; fix round: <typed>; <clause>`, so the same call again changes nothing.
+    Then write the plan's Status line. Returns (exit code, one line): 1 for a refusal, 2 when the
+    result file does not parse; neither writes the plan."""
     data = plan_path.read_bytes()
     plan = next_plan.parse_plan(data.decode("utf-8"))
     step = next((s for s in plan.steps if s.number == n), None)
@@ -1530,12 +1541,25 @@ def set_done_from_record(
                 f"{str(result['sha'])[:8]}; run check {n} again"
             )
         clause = evidence_clause(result)
-        typed = note[: -len(clause)] if note.endswith(clause) else note
-        conflict = note_conflicts(typed, result, n)
-        if conflict is not None:
-            return 1, conflict
-        if typed is note:
-            note = f"{note}; {clause}" if note else clause
+        current = step.note if step is not None and step.state == "DONE" else ""
+        if current and note == current:
+            pass  # the plan's own note passed back: nothing typed, nothing to judge or write
+        else:
+            typed = note[: -len(clause)].rstrip("; ") if note.endswith(clause) else note
+            conflict = note_conflicts(typed, result, n)
+            if conflict is not None:
+                return 1, conflict
+            if EVIDENCE_CLAUSE_RE.search(current):
+                if current.endswith(clause):
+                    # the same round: the typed note replaces this round's note alone
+                    cut = current.rfind("; fix round: ")
+                    head = current[:cut] if cut != -1 else ""
+                    entry = f"fix round: {typed}; {clause}" if head else f"{typed}; {clause}"
+                    note = f"{head}; {entry}" if head else entry
+                else:
+                    note = f"{current}; fix round: {typed}; {clause}"
+            elif typed is note:
+                note = f"{note}; {clause}" if note else clause
     elif in_run:
         return 1, RUN_NO_RESULT_REFUSAL.format(n=n)
     elif not records_gap(note, n):
@@ -3122,7 +3146,9 @@ def boundary_commit(
     """`boundary-commit` (sweep spec R3), run-less: commit the plan alone at the chunk boundary,
     after the Findings append, as `docs(plan): <subject>`, with the record beside it under
     Record. Nothing else is staged: the plan and the record are the boundary's own changes.
-    Returns (exit code, one line): 0 committed, 1 refused or the commit failed, 2 apparatus."""
+    A plan untracked by design is skipped before the tree is read (3.5.10 spec R3).
+    Returns (exit code, one line): 0 committed or skipped, 1 refused or the commit failed,
+    2 apparatus."""
     try:
         if load_state(root) is not None:
             return 1, "COMMIT REFUSED boundary: a run is live"
@@ -3130,7 +3156,13 @@ def boundary_commit(
             _refuse_prefixed(title)
         except TitleRefusedError as exc:
             return 1, f"COMMIT REFUSED boundary: {exc}"
-        plan_tracked = plan_is_tracked(root, plan)
+        if not plan_is_tracked(root, plan):
+            # project-a and project-b keep the plan out of git by design (info/exclude), so it never
+            # shows in the status read below: nothing to commit, and nothing to refuse
+            return 0, (
+                "COMMIT SKIPPED boundary: the plan is untracked by design; "
+                "the Findings stay in the root plan"
+            )
         parsed = next_plan.parse_plan((root / plan).read_text(encoding="utf-8"))
         record = plan_record(parsed)
         allowed = [plan] + ([record_path(record[1])] if record else [])
@@ -3152,7 +3184,7 @@ def boundary_commit(
         reason = check_staged_safe(
             root,
             staged_files(root),
-            untracked_plan=None if plan_tracked else plan,
+            untracked_plan=None,
             toolchain=next_plan.plan_toolchain_globs(parsed),
         )
         if reason:
@@ -3162,7 +3194,7 @@ def boundary_commit(
             sha = _commit_index(root, message, "boundary")
         except RuntimeError as exc:
             return 1, f"COMMIT FAIL boundary: {' '.join(str(exc).split())}"
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         return 2, f"COMMIT APPARATUS boundary: {exc}"
     return 0, f"COMMIT {sha}"
 

@@ -1,12 +1,12 @@
 <p align="center"><img src="https://github.com/ryanmat/adw/releases/download/v3.5.8/adw-logo.png" alt="ADW" width="720"></p>
 
-The spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic gates holding the line for code and graded evals holding it for model behavior.
+The intent, spec, plan, run pipeline for Claude Code: a person writes the intent by hand, `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic checks on the code and graded evals on model behavior.
 
 [![ci](https://github.com/ryanmat/adw/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanmat/adw/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/ryanmat/adw)](https://github.com/ryanmat/adw/releases/latest) [![license](https://img.shields.io/github/license/ryanmat/adw)](LICENSE)
 
 ## Overview
 
-adw is a Claude Code plugin and the methodology it implements. Three slash commands take one piece of work from an idea to a pull request, and every phase leaves a file in the repository: `/adw:spec` writes `spec.md`, `/adw:plan-tdd` writes `prompt_plan.md`, and `/adw:next` writes commits, one per step of the plan. An optional phase before the spec, the intent, leaves `docs/intents/<id>.md` for work that spans more than one spec; see [Intents and traceability in adw](docs/intent.md). A person signs at each boundary (the spec commit, the plan commit, and the report at the end of each chunk of steps), and the plugin enforces the rest in code. A guard hook denies hook bypasses. A Stop hook holds a turn open until the plan's tests pass. A check between the agent and every commit proves that the step's new tests fail on the commit the step started from, refuses staged secrets and toolchain files, and compares the suite's collected and skipped counts against the baseline, so a step cannot reach green by shrinking the suite.
+adw is a Claude Code plugin and the methodology it implements. The first file is the intent, `docs/intents/<id>.md`, a page a person writes by hand that states the outcome the work serves; work that fits in one spec skips it, as [Intents and traceability in adw](docs/intent.md) says. Three slash commands then take the work from that outcome to a pull request, and every phase leaves a file in the repository: `/adw:spec` writes `spec.md`, `/adw:plan-tdd` writes `prompt_plan.md`, and `/adw:next` writes commits, one per step of the plan. A person signs at each boundary (the intent and spec commits, the plan commit, and the report at the end of each chunk of steps), and the plugin enforces the rest in code. A guard hook denies hook bypasses. A Stop hook holds a turn open until the plan's tests pass. A check between the agent and every commit proves that the step's new tests fail on the commit the step started from, refuses staged secrets and toolchain files, and compares the suite's collected and skipped counts against the baseline, so a step cannot reach green by shrinking the suite.
 
 Start with [Your first feature with adw](docs/first-feature.md), which walks the three commands once on a real repository and shows the files they produced. The methodology is `ai-dev-workflow.md`; the step-by-step procedure is `workflow-runbook.md`. The command files under `commands/` are the source of truth for what each command does: they are the text the model reads when you type the command, so when the loop does something these documents did not prepare you for, the answer is in `commands/next.md`.
 
@@ -14,10 +14,10 @@ Nothing in the plugin is standing agent context; every piece is loaded by the pl
 
 ## Setup
 
-Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first; a lower version prints one line and the hooks stand down), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
+Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first; a lower version prints one line and the hooks stand down, except the guard hook, which keeps its denials from 3.9), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.9
+claude plugin marketplace add ryanmat/adw@v3.5.10
 claude plugin install adw@adw --scope user
 ```
 
@@ -45,7 +45,16 @@ Permission deny rules cannot ship in a plugin; they stay in user settings.
 
 ## Usage
 
-In a Claude Code session in the target repository, three commands, with a commit in your shell after each of the first two:
+In a Claude Code session in the target repository, one file you write and three commands, with a commit in your shell after the file and after each of the first two commands. The intent is optional: when the work fits in one spec, start at `/adw:spec`.
+
+```text
+docs/intents/<id>.md                   # by hand: the outcome the work serves, in the seven sections docs/intent.md lists
+                                       # name the id in the spec request and the spec's header carries Intent: <id>
+```
+
+```bash
+git add docs/intents/<id>.md && git commit -m "docs: add intent <id>"
+```
 
 ```text
 /adw:spec <idea in 2-4 sentences>      # interview mode; quick: and v0: are the other two
@@ -77,7 +86,7 @@ The methodology is `ai-dev-workflow.md`; the moves without the reasoning are `wo
 
 ## Intents and traceability
 
-Above a spec sits an intent: the outcome a set of units of work serves, carried by an id such as `30.1`. The engine never writes one. The id travels through four places, the intent file at `docs/intents/<id>.md`, the `Intent:` line in the spec and plan headers, the `Intent:` trailer on a pull request body, and the `## Intents` Now table of `docs/setup-plan.md`, and the projection reads the last two, so that `query intent` lists what has landed against each outcome. The file's shape, each carrier and the queries are in [Intents and traceability in adw](docs/intent.md).
+An intent sits above a spec: the outcome that several pieces of work serve together, carried by an id such as `30.1`. The engine never writes one. The id travels through four places, the intent file at `docs/intents/<id>.md`, the `Intent:` line in the spec and plan headers, the `Intent:` trailer on a pull request body, and the `## Intents` Now table of `docs/setup-plan.md`, and the projection reads the last two, so that `query intent` lists what has landed against each outcome. The file's shape, each carrier and the queries are in [Intents and traceability in adw](docs/intent.md).
 
 ## Layout
 

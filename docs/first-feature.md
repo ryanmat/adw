@@ -11,7 +11,7 @@ This page walks that path once on a real repository and shows the files it produ
 Install the plugin at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.9
+claude plugin marketplace add ryanmat/adw@v3.5.10
 claude plugin install adw@adw --scope user
 ```
 

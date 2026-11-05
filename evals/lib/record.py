@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Description: One evidence record for the next-auto eval: converts a run summary into
 # Description: d6-record/1 lines and appends the shared ledger (evals/ledger.jsonl).
 
@@ -13,9 +12,7 @@ from pathlib import Path
 
 SCHEMA = "d6-record/1"
 SUMMARY_SCHEMA = "d6-ledger-summary/1"
-SUPPORTED_AGGREGATE_SCHEMA = 1
 DEFAULT_INSTALLED = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
-DEFAULT_LEDGER = Path(__file__).resolve().parents[1] / "ledger.jsonl"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -106,9 +103,6 @@ def resolve_plugin(
             "gitCommitSha": entry.get("gitCommitSha"),
         }
     return {"name": name, "version": None, "gitCommitSha": None}
-
-
-# ---- plugin eval -------------------------------------------------------------
 
 
 # ---- next-auto ---------------------------------------------------------------
@@ -205,9 +199,6 @@ def append(ledger_path: Path, records: list[dict]) -> None:
         for r in records:
             fh.write(json.dumps(r, sort_keys=True) + "\n")
         fh.write(json.dumps(summary, sort_keys=True) + "\n")
-
-
-CORRECTION_SCHEMA = "d6-ledger-correction/1"
 
 
 def record_passed(r: dict) -> bool:

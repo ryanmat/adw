@@ -17,9 +17,9 @@ Three optional tasks sit beside these: set up a new repository, once per reposit
 
 ## Before you begin
 
-- Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only. A lower version prints one line and the hooks stand down.
+- Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only. A lower version prints one line and the hooks stand down, except the guard hook, which keeps its denials from 3.9.
 - For a Python project, `uv` is installed and the repository has a `uv.lock`; the plan's Test and Lint commands start with `uv run`, and an unattended run syncs the environment with `uv sync --locked`.
-- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.9 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
+- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.10 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
 - `gh` is authenticated as a user who can push to the target repository and open pull requests.
 - The repository has pre-commit installed; see Optional: Set up a new repository.
 - For unattended runs, `ADW_OWNERS` in the `env` block of the user's settings names the GitHub owners a run may target.
@@ -152,7 +152,7 @@ To run the loop:
    Use a subagent to review the diff against prompt_plan.md step N. Flag only gaps that affect correctness or stated requirements.
    ```
 
-9. Run `/adw:next` again at each boundary until no incomplete prompt remains. When the boundary review appended a finding to the plan, the loop commits the plan alone with `python3 $AUTO boundary-commit` (`docs(plan): record the Chunk <label> review findings`), which refuses any other change in the tree; without that commit the next run's clean-tree check stops there.
+9. Run `/adw:next` again at each boundary until no incomplete prompt remains. When the boundary review appended a finding to the plan, the loop commits the plan alone with `python3 $AUTO boundary-commit` (`docs(plan): record the Chunk <label> review findings`), which refuses any other change in the tree, and prints `COMMIT SKIPPED boundary` (exit 0) for a plan kept untracked by design, whose Findings stay in the root plan; without that commit the next run's clean-tree check stops there.
 
 ## Optional: Run the loop unattended
 

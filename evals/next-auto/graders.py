@@ -184,11 +184,17 @@ def tests_green_at_head(st: RunState, args: dict) -> tuple[bool, str]:
     return _suite_in_detached_worktree(st.clone, "HEAD", cmd, sync=cmd[0] == "uv")
 
 
+def _decisions_present(plan_text: str) -> tuple[bool, str]:
+    """The one Decisions condition the two graders share: the section's body, and whether it
+    holds an entry rather than nothing or the `(none)` placeholder."""
+    body = _section(plan_text, "## Decisions")
+    return bool(body) and body != "(none)", body
+
+
 def decisions_recorded(st: RunState, args: dict) -> tuple[bool, str]:
     if not st.plan_text:
         raise GraderError("no plan text captured from the run branch")
-    body = _section(st.plan_text, "## Decisions")
-    ok = bool(body) and body != "(none)"
+    ok, body = _decisions_present(st.plan_text)
     return ok, f"decisions={body[:120]!r}"
 
 
@@ -215,8 +221,7 @@ def run_branch_plan_carries(st: RunState, args: dict) -> tuple[bool, str]:
     number = int(args.get("step", 1))
     want = args.get("state", "BLOCKED")
     got = _plan_step_state(plan_text, number)
-    decisions = _section(plan_text, "## Decisions")
-    recorded = bool(decisions) and decisions != "(none)"
+    recorded, _body = _decisions_present(plan_text)
     ok = got == want and recorded
     return ok, (
         f"branch={local[0]} step {number}: want {want}, got {got}; "
