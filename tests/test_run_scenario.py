@@ -993,3 +993,120 @@ def test_every_fixture_plan_passes_the_auto_preflight_size_rule(plan):
 
     assert next_plan.validate_text(plan.read_text()) == []
     assert next_auto._unsized_pending(plan.parent, plan) is None
+
+
+# ---- decision-stop-empty, the hand-back scenario (carries spec R16, Step 18 of the 3.5.9 plan) --
+# A run whose first step hands back commits nothing, pushes nothing and opens no pull request
+# since the 3.5.9 engine (carries spec R11); the local run branch and its chore(plan) commit
+# stay for the morning read. list_run_branches and no_branch_created count that local branch,
+# so the scenario reads remote refs alone and the local branch's plan.
+
+HAND_BACK_PLAN = (
+    "### Step 1: persistence backend\nStatus: BLOCKED (decision: sqlite or json?)\n\n"
+    "### Step 2: slugify\nStatus: PENDING\n\n"
+    "## Decisions\n- Step 1: sqlite or json? [run 20260911-abc123]\n\n"
+    "## Findings\n(none)\n"
+)
+
+
+def _clone_with_local_run_branch(tmp_path, plan_text=HAND_BACK_PLAN):
+    """A clone whose local run branch carries a plan, not pushed: what the hand-back leaves."""
+    import graders
+
+    clone = make_clone_with_run_branch(tmp_path)
+    branch = "next-auto/widget-20260911-abc123"
+    git(clone, "checkout", "-q", "-b", branch)
+    (clone / "prompt_plan.md").write_text(plan_text)
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "chore(plan): record run 20260911-abc123 step states")
+    git(clone, "checkout", "-q", "main")
+    st = graders.RunState(
+        clone=clone, baseline_sha="a" * 40, main_sha="a" * 40, run_branches=[branch],
+        prs=[], plan_text="", summary_text="", state_files=[], stream_text="",
+        branch_diff_files=[], branch_commits=1,
+    )
+    return clone, branch, st
+
+
+def test_no_remote_run_branch_reads_remote_refs_alone(tmp_path):
+    import graders
+
+    clone, branch, st = _clone_with_local_run_branch(tmp_path)
+    assert run_scenario.list_run_branches(clone) == [branch]
+    ok, detail = graders.no_remote_run_branch(st, {})
+    assert ok, detail
+    git(clone, "push", "-q", "origin", branch)
+    git(clone, "fetch", "-q", "origin")
+    ok, detail = graders.no_remote_run_branch(st, {})
+    assert not ok
+    assert f"origin/{branch}" in detail
+
+
+@pytest.mark.parametrize(
+    "plan_text, ok, needle",
+    [
+        (HAND_BACK_PLAN, True, "BLOCKED"),
+        (
+            HAND_BACK_PLAN.replace("BLOCKED (decision: sqlite or json?)", "PENDING"),
+            False,
+            "PENDING",
+        ),
+        (
+            HAND_BACK_PLAN.replace("- Step 1: sqlite or json? [run 20260911-abc123]", "(none)"),
+            False,
+            "Decisions",
+        ),
+    ],
+)
+def test_run_branch_plan_carries_the_blocked_status_and_the_decision(
+    tmp_path, plan_text, ok, needle
+):
+    import graders
+
+    _clone, _branch, st = _clone_with_local_run_branch(tmp_path, plan_text)
+    got, detail = graders.run_branch_plan_carries(st, {"step": 1, "state": "BLOCKED"})
+    assert got is ok, detail
+    assert needle in detail
+
+
+def test_run_branch_plan_carries_raises_without_a_local_run_branch(tmp_path):
+    import graders
+
+    clone = make_clone_with_run_branch(tmp_path)
+    st = _state("")
+    st.clone = clone
+    with pytest.raises(graders.GraderError):
+        graders.run_branch_plan_carries(st, {"step": 1})
+
+
+def test_decision_stop_empty_scenario_and_plan_fixture_are_well_formed():
+    import next_plan
+
+    here = RUNNER.parent
+    sc = run_scenario.Scenario.load(here / "scenarios" / "decision-stop-empty.json")
+    assert sc.plan == "decision-stop-empty"
+    assert sc.prompt == "/adw:next auto 3"
+    assert set(sc.graders) == {
+        "no_remote_run_branch", "run_branch_plan_carries", "run_stopped",
+        "state_file_removed", "main_at_baseline", "plan_step_states",
+        "no_pr_opened", "stream_contains",
+    }
+    assert sc.grader_args["plan_step_states"] == {"1": "BLOCKED", "2": "PENDING", "3": "PENDING"}
+    # Step 19 (Chunk H review): the NO PR text and the absence of a pull request are graded,
+    # as the carries spec's Verification paragraph expects
+    assert sc.grader_args["stream_contains"] == {"text": "NO PR: no step committed"}
+    assert sc.grader_args["run_branch_plan_carries"] == {"step": 1, "state": "BLOCKED"}
+    plan = (here / "fixtures" / "plans" / f"{sc.plan}.md").read_text()
+    assert next_plan.validate_text(plan) == []
+    parsed = next_plan.parse_plan(plan)
+    assert [s.title for s in parsed.steps] == ["persistence backend", "slugify", "word_count"]
+    assert "decision for the human" in parsed.steps[0].body
+    sibling = (here / "fixtures" / "plans" / "decision-stop.md").read_text()
+    assert next_plan.parse_plan(sibling).steps[1].body.strip() == parsed.steps[0].body.strip()
+
+
+def test_list_prints_nine_scenarios(capsys):
+    assert run_scenario.main(["--list"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 9, lines
+    assert any(ln.startswith("decision-stop-empty ") for ln in lines)

@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 12):  # noqa: UP036  (the guard runs below the floor by design)
+    sys.stderr.write(
+        f"adw: python3 is {sys.version_info[0]}.{sys.version_info[1]}; "
+        "the plugin needs 3.12 or later on PATH\n"
+    )
+    sys.exit(2)
+
 import argparse
 import hashlib
 import json
@@ -53,6 +62,30 @@ STEP_SIZE_DEFAULT = 300
 RUN_SIZE_LIMIT = 500
 # a step's optional Closes: line names the requirement ids the step closes
 REQUIREMENT_RE = re.compile(r"^R[0-9]+$")
+# the files the auto gate lets a step change only when the brief names them (next_auto's
+# check_gate_config reads this tuple); one source with the plan-time warning below
+GATE_CONFIG_FILES = (
+    "conftest.py",
+    "pytest.ini",
+    "tox.ini",
+    "pyproject.toml",
+    "ruff.toml",
+    ".ruff.toml",
+    "setup.cfg",
+    ".pre-commit-config.yaml",
+    "CLAUDE.md",
+    "Makefile",
+)
+# the stems validate warns about when an open step names one without its basename: the four
+# that are not ordinary prose (ruff, setup, pytest, Makefile and CLAUDE are left out, since
+# step text names the ruff command, test setup and pytest routinely and Makefile is its own
+# basename)
+GATE_CONFIG_STEMS = (
+    ("pyproject", "pyproject.toml"),
+    ("conftest", "conftest.py"),
+    ("pre-commit-config", ".pre-commit-config.yaml"),
+    ("tox", "tox.ini"),
+)
 
 STATES = ("PENDING", "IN PROGRESS", "DONE", "FAILED", "BLOCKED")
 # a step's header lines: each at most once, written by the brief in canonical form and
@@ -322,6 +355,29 @@ def shell_operator(value: str) -> str | None:
         if not tok.strip("();<>|&") and ("&&" in tok or "|" in tok or ";" in tok):
             return tok
     return None
+
+
+def validate_warnings(text: str) -> list[tuple[int, str]]:
+    """The plan-time warnings, never refusals: an open step (PENDING or IN PROGRESS) whose text
+    names a gate-config stem as a whole word not followed by its extension, with the basename
+    nowhere in the step, would fail the gate's config check at its edit."""
+    warnings: list[tuple[int, str]] = []
+    for step in parse_plan(text).steps:
+        if step.state not in ("PENDING", "IN PROGRESS"):
+            continue
+        step_text = f"{step.title}\n{step.body}"
+        for stem, basename in GATE_CONFIG_STEMS:
+            if basename in step_text:
+                continue
+            ext = basename[basename.index(".", 1) :]
+            pattern = rf"(?<![A-Za-z0-9_-]){re.escape(stem)}(?![A-Za-z0-9_-])(?!{re.escape(ext)})"
+            if re.search(pattern, step_text):
+                msg = (
+                    f"Step {step.number}: names {stem} without its basename {basename}; the "
+                    "gate authorizes a config edit only when the step text contains the basename"
+                )
+                warnings.append((step.header_line, msg))
+    return warnings
 
 
 def validate_text(text: str) -> list[tuple[int, str]]:
@@ -922,6 +978,10 @@ def append_section_bytes(data: bytes, section: str, entry: str) -> bytes:
         insert_at = end
         while insert_at - 1 > hidx and lines[insert_at - 1].decode("utf-8").strip() == "":
             insert_at -= 1
+        # the line before the insertion point ends with the file's newline, so the bullet
+        # never lands mid-line when the section's last line was saved without one
+        if not _newline_of(lines[insert_at - 1]):
+            lines[insert_at - 1] += nl
         lines.insert(insert_at, entry_line)
     return b"".join(lines)
 
@@ -1123,9 +1183,128 @@ def migrate_text(text: str) -> str:
             for i, h in enumerate(hdrs, start=1)
         )
         text = append_section_bytes(
-            text.encode("utf-8"), "findings", f"Legacy step map: {entries}"
+            text.encode("utf-8"), "findings", f"{LEGACY_MAP_KEY}: {entries}"
         ).decode("utf-8")
     return text
+
+
+# ---- renumber ---------------------------------------------------------------
+
+# a whole-word `Step <n>` or `Steps <n>` reference: not inside a longer word, not the prefix of
+# a longer label (`Step 70`, `Step 7a`, `Step 7.1`), so a map over 7 never touches them; after
+# a plural, the numbers of a following `, <n>`, `and <n>` or `to <n>` list are references too
+STEP_REF_RE = re.compile(r"(?<![A-Za-z0-9_-])(Steps?) (\d+)(?![0-9A-Za-z])(?!\.\d)")
+_STEP_LIST_RE = re.compile(r"(?:,\s*|\s+and\s+|\s+to\s+)(\d+)(?![0-9A-Za-z])(?!\.\d)")
+RENUMBER_SECTIONS = ("headers", "status", "bodies", "decisions", "findings")
+LEGACY_MAP_KEY = "Legacy step map"
+
+
+class RenumberError(ValueError):
+    """A renumber the plan grammar refuses: a shift that is not positive, a start above every
+    step, or a step in range that is not PENDING."""
+
+
+def _renumber_map(plan: Plan, start: int, by: int) -> dict[int, int]:
+    # a positive shift over every step from `start` up: an insertion or a split, the only
+    # cases the numbering rule allows; nothing it moves can land on a step it keeps
+    if by <= 0:
+        raise RenumberError(
+            f"by is {by}; a renumber shifts the steps by a positive number, an insertion or a split"
+        )
+    moved = [s for s in plan.steps if s.number >= start]
+    if not moved:
+        raise RenumberError(f"no step is numbered {start} or above; nothing to renumber")
+    for s in moved:
+        if s.state != "PENDING":
+            raise RenumberError(
+                f"Step {s.number} is {s.state}; a renumber moves PENDING steps only, and a "
+                "DONE step's number never changes"
+            )
+    return {s.number: s.number + by for s in moved}
+
+
+def renumber_text(text: str, start: int, by: int) -> tuple[str, dict[int, int], dict[str, int]]:
+    """Relabel every PENDING step numbered `start` and above by `by`, and every whole-word
+    `Step <n>` reference to one of them in the step headers, the `Status:` notes, the step
+    bodies, and the Decisions and Findings sections. Returns the text, the old-to-new map and
+    the count of references rewritten per section. Bytes outside the rewritten spans are
+    unchanged; a reference to a label outside the map is left alone."""
+    plan = parse_plan(text)
+    mapping = _renumber_map(plan, start, by)
+    lines = text.splitlines(keepends=True)
+    counts = dict.fromkeys(RENUMBER_SECTIONS, 0)
+    if not plan.steps:
+        return text, mapping, counts
+    header_lines = {s.header_line for s in plan.steps}
+    status_lines = {s.status_line for s in plan.steps if s.status_line is not None}
+    section = "bodies"
+    for i in range(plan.steps[0].header_line, len(lines) + 1):
+        raw = lines[i - 1]
+        bare = raw.rstrip("\r\n")
+        if bare == DECISIONS_HEADER:
+            section = "decisions"
+        elif bare == FINDINGS_HEADER:
+            section = "findings"
+        if i in header_lines:
+            where = "headers"
+        elif i in status_lines:
+            where = "status"
+        else:
+            where = section
+        lines[i - 1], n = _swap_step_refs(raw, mapping)
+        counts[where] += n
+    return "".join(lines), mapping, counts
+
+
+def _step_ref_spans(line: str) -> list[tuple[int, int, int]]:
+    """(start, end, number) of every step number a reference on the line names: the one after
+    `Step`, and after `Steps` every number of the list that follows it."""
+    spans: list[tuple[int, int, int]] = []
+    pos = 0
+    while (m := STEP_REF_RE.search(line, pos)) is not None:
+        spans.append((m.start(2), m.end(2), int(m.group(2))))
+        pos = m.end()
+        if m.group(1) == "Steps":
+            while (n := _STEP_LIST_RE.match(line, pos)) is not None:
+                spans.append((n.start(1), n.end(1), int(n.group(1))))
+                pos = n.end()
+    return spans
+
+
+def _swap_step_refs(line: str, mapping: dict[int, int]) -> tuple[str, int]:
+    """One line with every mapped step reference rewritten, and how many numbers were."""
+    out: list[str] = []
+    last = swapped = 0
+    for start, end, n in _step_ref_spans(line):
+        if n in mapping:
+            out.append(line[last:start])
+            out.append(str(mapping[n]))
+            last = end
+            swapped += 1
+    out.append(line[last:])
+    return "".join(out), swapped
+
+
+def _extend_legacy_map(data: bytes, entries: str) -> bytes:
+    """The old-to-new mapping on the `- Legacy step map:` line under Findings, after the
+    entries already there; the line is created on the first renumber, as migrate creates it."""
+    lines = _split_keepends(data)
+    in_findings = False
+    for i, raw in enumerate(lines):
+        bare = raw.decode("utf-8").rstrip("\r\n")
+        if bare.startswith("## "):
+            in_findings = bare == FINDINGS_HEADER
+        elif in_findings and bare.startswith(f"- {LEGACY_MAP_KEY}:"):
+            lines[i] = (bare + ", " + entries).encode("utf-8") + _newline_of(raw)
+            return b"".join(lines)
+    return append_section_bytes(data, "findings", f"{LEGACY_MAP_KEY}: {entries}")
+
+
+def unmapped_step_references(text: str, mapping: dict[int, int]) -> list[int]:
+    """The distinct `Step <n>` labels the text references outside the map, in order: the
+    steps a renumber left alone, and any label that names no step at all."""
+    found = {n for ln in text.splitlines() for _start, _end, n in _step_ref_spans(ln)}
+    return sorted(n for n in found if n not in mapping and n not in mapping.values())
 
 
 # ---- CLI --------------------------------------------------------------------
@@ -1211,6 +1390,11 @@ def main(argv: list[str] | None = None) -> int:
     ap_.add_argument("section", choices=["decisions", "findings"])
     ap_.add_argument("--note-file", required=True)
 
+    rn = sub.add_parser("renumber")
+    rn.add_argument("plan")
+    rn.add_argument("--from", dest="start", type=int, required=True, help="the first step moved")
+    rn.add_argument("--by", type=int, required=True, help="the shift, positive for an insertion")
+
     rl = sub.add_parser("ruling")
     rl_sub = rl.add_subparsers(dest="ruling_cmd", required=True)
     rl_add = rl_sub.add_parser("add")
@@ -1231,11 +1415,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.cmd == "validate":
-        reasons = validate_text(plan_path.read_text(encoding="utf-8"))
+        text = plan_path.read_text(encoding="utf-8")
+        reasons = validate_text(text)
         if reasons:
             for ln, msg in reasons:
                 print(f"{plan_path}:{ln}: {msg}", file=sys.stderr)
             return 2
+        for ln, msg in validate_warnings(text):
+            print(f"{plan_path}:{ln}: WARN {msg}", file=sys.stderr)
         return 0
 
     if args.cmd == "migrate":
@@ -1261,6 +1448,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         plan = parse_plan(plan_path.read_text(encoding="utf-8"))
         print(json.dumps(to_json(plan), indent=2))
+        return 0
+
+    if args.cmd == "renumber":
+        data = plan_path.read_bytes()
+        try:
+            text, mapping, counts = renumber_text(data.decode("utf-8"), args.start, args.by)
+        except RenumberError as exc:
+            print(f"{plan_path}: {exc}", file=sys.stderr)
+            return 2
+        entries = ", ".join(f"{old} -> {new}" for old, new in mapping.items())
+        plan_path.write_bytes(_extend_legacy_map(text.encode("utf-8"), entries))
+        print(f"renumbered {plan_path}: {entries}")
+        for name in RENUMBER_SECTIONS:
+            print(f"{name}: {counts[name]}")
+        alone = unmapped_step_references(text, mapping)
+        print("left alone: " + (", ".join(f"Step {n}" for n in alone) if alone else "none"))
         return 0
 
     if args.cmd == "plan-hash":

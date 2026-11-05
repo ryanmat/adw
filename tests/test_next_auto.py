@@ -715,6 +715,7 @@ def test_start_refuses_missing_or_invalid_plan_before_gh(tmp_path, capsys, monke
     """start has the same order as preflight: the plan is decided from the tree, so with
     gh absent a missing plan says "no plan", not the gh failure, and nothing is created."""
     repo, _ = make_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     called = []
 
     def boom(_root):
@@ -861,6 +862,17 @@ def test_parse_origin_repo_variants():
     assert next_auto.parse_origin_repo("/local/path/origin.git") is None
 
 
+def record_committed_step(repo, n, sha="deadbeefcafe"):
+    """What commit_run writes to state.json for a committed step (scripts/next_auto.py,
+    commit_run: state["steps"][n] = {"state": "DONE", "note": "commit <sha8>"}), for a wrap_up
+    test that commits through commit_step or sets a step done without a commit: since the 3.5.9
+    engine (carries spec R11) wrap_up reads state["steps"] to choose between the pull request
+    and the hand-back, so a PR-path test records its committed step as the engine does."""
+    state = next_auto.load_state(repo)
+    state.setdefault("steps", {})[str(n)] = {"state": "DONE", "note": f"commit {sha[:8]}"}
+    next_auto.save_state(state)
+
+
 def fake_gh(calls, url="https://github.com/ryanmat/fixture/pull/7"):
     def _gh(args, root=None):
         calls.append(list(args))
@@ -895,6 +907,7 @@ def test_wrap_up_commits_plan_pushes_opens_pr_and_disarms(tmp_path, monkeypatch,
     next_auto.stage_all(wt)
     sha = next_auto.commit_step(wt, 1, "first")
     next_auto.set_step(repo, 1, "done", f"2 tests green, {sha[:8]}")
+    record_committed_step(repo, 1, sha)
     next_auto.step_begin(repo, 2)
     next_auto.append_plan(repo, "decisions", "Step 2: sqlite or json?")
     next_auto.set_step(repo, 2, "blocked-decision", "sqlite or json?")
@@ -939,13 +952,16 @@ def test_wrap_up_cli_prints_run_stopped(tmp_path, monkeypatch, capsys):
     repo, _ = make_repo(tmp_path)
     next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
     next_auto.step_begin(repo, 1)
-    next_auto.set_step(repo, 1, "failed", "gate red twice")
+    next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
+    next_auto.step_begin(repo, 2)
+    next_auto.set_step(repo, 2, "failed", "gate red twice")
     monkeypatch.setattr(next_auto, "gh", fake_gh([]))
     monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
     rc = next_auto.main(["--root", str(repo), "wrap-up"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "RUN STOPPED FAILED step 1 PR #7" in out
+    assert "RUN STOPPED FAILED step 2 PR #7" in out
     assert next_auto.find_state_file(repo) is None
 
 
@@ -965,6 +981,7 @@ def test_wrap_up_keeps_marker_when_push_fails(tmp_path, monkeypatch):
     repo, _ = make_repo(tmp_path)
     state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
     git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
     monkeypatch.setattr(next_auto, "gh", fake_gh([]))
     with pytest.raises(RuntimeError, match="push"):
@@ -977,6 +994,7 @@ def test_wrap_up_keeps_marker_when_pr_fails(tmp_path, monkeypatch):
     repo, _ = make_repo(tmp_path)
     next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
 
     def failing_gh(args, root=None):
         return subprocess.CompletedProcess(["gh", *args], 1, stdout="", stderr="label missing")
@@ -1043,6 +1061,7 @@ def test_size_cli_reports_run_level_diff(tmp_path, capsys):
 def test_start_cli_fails_closed_when_gh_unavailable(tmp_path, monkeypatch, capsys):
     """No silent fallback to main: a gh failure at start is one line and no run."""
     repo, _ = make_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
 
     def boom(_root):
         raise RuntimeError("gh repo view failed: not logged in")
@@ -1303,6 +1322,7 @@ def test_wrap_up_untracked_plan_absent_from_branch_and_written_to_root(tmp_path,
     next_auto.stage_all(wt)
     sha = next_auto.commit_step(wt, 1, "first")
     next_auto.set_step(repo, 1, "done", f"3 tests green, {sha[:8]}")
+    record_committed_step(repo, 1, sha)
     next_auto.append_plan(repo, "decisions", "Step 2: sqlite or json?")
     next_auto.append_plan(repo, "findings", "Important: naming")
     next_auto.set_step(repo, 2, "blocked-decision", "sqlite or json?")
@@ -1336,6 +1356,7 @@ def test_wrap_up_untracked_plan_stays_put_when_the_pr_fails(tmp_path, monkeypatc
     root_before = (repo / "prompt_plan.md").read_bytes()
     next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
 
     def failing_gh(args, root=None):
         return subprocess.CompletedProcess(["gh", *args], 1, stdout="", stderr="label missing")
@@ -1375,6 +1396,34 @@ def test_append_plan_tags_entries_with_the_run_id(tmp_path):
     text = (wt / "prompt_plan.md").read_text()
     assert "- Ruling: kept X / spec R1 / cost: none [run 20260911-abc123]" in text
     assert "- Minor: naming second line [run 20260911-abc123]" in text
+
+
+# ---- one run tag per entry (carries spec R12, Step 11 of the 3.5.9 engine plan) --------------
+
+
+def test_append_plan_writes_one_tag_when_the_entry_already_carries_its_own(tmp_path):
+    """An entry that already ends with this run's tag gains no second one: the project-b store plan
+    carried three doubled entries (runs 20261007-3f4de5, 20261008-dd09bd, 20261026-4703c3,
+    read 2026-11-04 in ~/tmp/project-b-store-20261026/prompt_plan.md on devbox), each a review-round
+    Findings entry whose note already ended with the tag."""
+    repo, wt = start_wt(tmp_path)
+    own = "Ruling: kept X / spec R1 / cost: none [run 20260911-abc123]"
+    next_auto.append_plan(repo, "decisions", own)
+    next_auto.append_plan(repo, "findings", "Minor: naming [run 20260911-abc123]\n")
+    text = (wt / "prompt_plan.md").read_text()
+    assert "- Ruling: kept X / spec R1 / cost: none [run 20260911-abc123]\n" in text
+    assert "- Minor: naming [run 20260911-abc123]\n" in text
+    assert text.count("[run 20260911-abc123]") == 2
+
+
+def test_append_plan_keeps_another_runs_tag_and_adds_its_own_once(tmp_path):
+    """The strip matches the run's own tag only: an entry quoting an earlier run's ruling keeps
+    that run's tag and gains this run's once."""
+    repo, wt = start_wt(tmp_path)
+    other = "Ruling: kept X / spec R1 / cost: none [run 20260101-ffffff]"
+    next_auto.append_plan(repo, "decisions", other)
+    text = (wt / "prompt_plan.md").read_text()
+    assert f"- {other} [run 20260911-abc123]\n" in text
 
 
 # ---- secret scan and the public PR body (review gap 4, 2026-09-11) --------------------------
@@ -1535,6 +1584,7 @@ def _run_with_report_and_paths(tmp_path):
     wt = Path(state["worktree"])
     run_dir = Path(state["run_dir"])
     next_auto.set_step(repo, 1, "done", "3 tests green, aaa111")
+    record_committed_step(repo, 1)
     next_auto.append_plan(repo, "findings", f"Minor: the patch sits at {run_dir}/step-2.patch")
     next_auto.append_plan(repo, "decisions", "Step 2: sqlite or json?")
     (run_dir / "report-1.md").write_text(
@@ -1596,6 +1646,7 @@ def test_wrap_up_refuses_secret_in_body_and_keeps_marker(tmp_path, monkeypatch, 
     repo, origin = make_repo(tmp_path)
     state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
     next_auto.append_plan(repo, "findings", "the token is ghp_" + "A" * 36 + " (rotate it)")
     calls = []
     monkeypatch.setattr(next_auto, "gh", fake_gh_visibility(calls, private=True))
@@ -1695,21 +1746,6 @@ def gh_shim(tmp_path, monkeypatch, *, pr_list):
 
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     return shim
-
-
-def test_has_open_next_auto_pr_is_none_when_gh_fails_or_does_not_parse(tmp_path, monkeypatch):
-    repo, _ = make_repo(tmp_path)
-    gh_shim(tmp_path, monkeypatch, pr_list='echo "HTTP 502: bad gateway" >&2; exit 1')
-    assert next_auto.has_open_next_auto_pr(repo) is None
-    gh_shim(tmp_path, monkeypatch, pr_list="echo not-json")
-    assert next_auto.has_open_next_auto_pr(repo) is None
-    gh_shim(tmp_path, monkeypatch, pr_list="echo '[]'")
-    assert next_auto.has_open_next_auto_pr(repo) is False
-    gh_shim(
-        tmp_path, monkeypatch,
-        pr_list="echo '[{\"headRefName\": \"next-auto/x-20260101-aaaaaa\", \"number\": 3}]'",
-    )  # fmt: skip
-    assert next_auto.has_open_next_auto_pr(repo) is True
 
 
 def test_preflight_checks_refuse_unknown_pr_listing(tmp_path):
@@ -2794,6 +2830,9 @@ def test_merge_accepts_the_done_check_verdict_in_upper_case(tmp_path, monkeypatc
 
 
 def test_merge_refuses_without_a_preflight_note(tmp_path, monkeypatch):
+    """With ADW_PREFLIGHT_NOTE=required (the private estate's setting, rul-bb28451acc) a head
+    without the preflight plugin's note is refused as before (sweep spec R1)."""
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", "required")
     repo, sha = merge_ready(tmp_path)
     git(repo, "notes", "--ref=preflight", "remove", sha)
     monkeypatch.setattr(next_auto, "gh", merge_gh([], green_pr(sha)))
@@ -2833,6 +2872,7 @@ def test_merge_refuses_a_draft(tmp_path, monkeypatch):
 
 
 def test_merge_prints_one_line_per_failed_condition(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", "required")
     repo, sha = merge_ready(tmp_path)
     git(repo, "notes", "--ref=preflight", "remove", sha)
     pr = green_pr(sha, isDraft=True, additions=600, reviewDecision="REVIEW_REQUIRED")
@@ -3040,7 +3080,9 @@ def test_merge_refuses_when_the_base_cannot_be_diffed(tmp_path, monkeypatch):
 
 def test_merge_fetches_the_head_from_origin_before_judging_it(tmp_path, monkeypatch):
     """The PR head usually lives only on the remote. merge fetches that sha (one git
-    operation) so the suite, lint, and the hunk scan run against it locally."""
+    operation) so the suite, lint, and the hunk scan run against it locally. The note
+    requirement is the gate's last refusal, so the test asks for it to prove the fetch."""
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", "required")
     repo, _sha = merge_ready(tmp_path)
     origin = tmp_path / "origin.git"
     git(origin, "config", "uploadpack.allowReachableSHA1InWant", "true")
@@ -3762,6 +3804,7 @@ def test_r12_wrap_up_without_record_pushes_once_and_makes_no_record_commit(tmp_p
     repo, origin = make_repo(tmp_path)
     state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260924-plain1", sync=False)
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
     monkeypatch.setattr(next_auto, "gh", fake_gh_visibility([], private=True))
     result = next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
     assert result["record"] is None
@@ -4045,6 +4088,7 @@ def test_r13_start_refuses_an_unapproved_plan_before_gh_and_creates_no_run(
     """ai-dlc-record R13, R17: start asks the record before it reaches GitHub; exit 1 is a
     START FAILED line with the engine's hash, and no run directory or branch exists after."""
     repo, control = record_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     stub_rc(control, "approved", 1)
 
     def boom(_root):
@@ -4065,6 +4109,7 @@ def test_r13_start_refuses_an_unapproved_plan_before_gh_and_creates_no_run(
 
 def test_r13_start_proceeds_when_the_plan_is_approved(tmp_path, capsys, monkeypatch):
     repo, control = record_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     view = {"isFork": False, "defaultBranchRef": {"name": "main"}}
     monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: view)
     rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
@@ -4078,6 +4123,7 @@ def test_r13_start_proceeds_when_the_plan_is_approved(tmp_path, capsys, monkeypa
 
 def test_r13_start_reports_an_approval_that_cannot_answer(tmp_path, capsys, monkeypatch):
     repo, control = record_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     stub_rc(control, "approved", 3)
     monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: {})
     rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
@@ -4483,6 +4529,7 @@ def test_r13_check_begin_reports_a_missing_record_as_apparatus(tmp_path):
 
 def test_r13_start_reports_a_missing_record(tmp_path, capsys, monkeypatch):
     repo, control = record_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     drop_record(repo)
     monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: {})
     rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
@@ -4938,8 +4985,8 @@ def test_r12_merge_no_longer_reads_the_done_check_from_the_verdict_file(tmp_path
 def test_r12_wrap_up_skips_pr_opened_when_the_run_committed_no_step(
     tmp_path, monkeypatch, capsys
 ):
-    """ai-dlc-record R12: a run that committed no step records no pr.opened, and wrap-up says
-    so on one line."""
+    """ai-dlc-record R12: a run that committed no step records no pr.opened; since the 3.5.9
+    engine (carries spec R11) it opens no pull request either, and wrap-up's one line says so."""
     repo, _wt, control = record_run(tmp_path, approved=True)
     next_auto.set_step(repo, 1, "blocked-decision", "which store?")
     monkeypatch.setattr(next_auto, "gh", fake_gh([]))
@@ -4947,7 +4994,7 @@ def test_r12_wrap_up_skips_pr_opened_when_the_run_committed_no_step(
     rc = next_auto.main(["--root", str(repo), "wrap-up"])
     out = capsys.readouterr()
     assert rc == 0, out.err
-    assert "RECORD SKIPPED pr.opened: the run committed no step" in out.out.splitlines()
+    assert out.out.splitlines() == [f"RUN STOPPED BLOCKED (decision) at step 1 {NO_PR_LINE}"]
     assert appends(control) == []
 
 
@@ -8952,6 +8999,48 @@ def test_wrap_up_ends_both_bodies_with_the_three_lines(tmp_path, monkeypatch):
     assert parsed.stdout == "Spec: docs/specs/x.md\nCloses: R1, R2\nApproved-by: @ryanmat\n"
 
 
+# Fixture shape: this repository's plan header at 6fd232c carries `Intent: DLC` under its
+# Spec: line (read 2026-11-04); `30.1` is the id form intent.md's example uses.
+def _intent_plan(header: str) -> str:
+    spec_line = "Spec: docs/specs/x.md. Owner: the owner.\n"
+    return BODY_PLAN.replace(spec_line, spec_line + header, 1)
+
+
+@pytest.mark.parametrize(
+    "header,intent",
+    [
+        ("Intent: 30.1\n", "Intent: 30.1"),
+        ("Intent: \n", None),
+        ("Intent: 30.1\nIntent: 30.2\n", "Intent: 30.1"),
+    ],
+)
+def test_body_lines_carry_the_plan_headers_intent_between_closes_and_approved_by(
+    tmp_path, header, intent
+):
+    """`Intent:` is the third line, from the plan header's first `Intent:` line, and an empty
+    value writes nothing (sweep spec R6); a plan without the line is the three-line case above."""
+    _repo, state = _body_run(tmp_path, plan_text=_intent_plan(header))
+    want = ["Spec: docs/specs/x.md", "Closes: R1, R2", "Approved-by: @ryanmat"]
+    if intent:
+        want.insert(2, intent)
+    assert next_auto.body_lines(state) == want
+
+
+def test_wrap_up_ends_both_bodies_with_the_intent_line_fourth(tmp_path, monkeypatch):
+    repo, state = _body_run(tmp_path, plan_text=_intent_plan("Intent: 30.1\n"))
+    monkeypatch.setattr(next_auto, "gh", fake_gh_visibility([], private=True))
+    next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    run_dir = Path(state["run_dir"])
+    tail = "\n\nSpec: docs/specs/x.md\nCloses: R1, R2\nIntent: 30.1\nApproved-by: @ryanmat\n"
+    for name in ("summary.md", "pr-body.md"):
+        assert (run_dir / name).read_text().endswith(tail), name
+    parsed = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=(run_dir / "pr-body.md").read_text(), capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    assert parsed.stdout == tail.lstrip("\n")
+
+
 def test_wrap_up_omits_approved_by_for_a_plan_with_no_record(tmp_path, monkeypatch):
     repo, _origin = make_repo(tmp_path)
     plain = BODY_PLAN.replace(f"- Record: tools/record-stub {RECORD_SLUG}\n", "")
@@ -9033,6 +9122,7 @@ def test_wrap_up_commits_nothing_when_the_sync_changes_nothing(tmp_path, monkeyp
     branch = next_auto.load_state(repo)["branch"]
     (control / "sync-silent").write_text("")
     next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
     monkeypatch.setattr(next_auto, "gh", fake_gh_visibility([], private=True))
     next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
     assert [c["argv"] for c in stub_calls(control) if c["argv"][0] == "sync"] == [
@@ -9718,6 +9808,7 @@ def test_r14_start_refuses_beside_a_live_plan_sharing_a_class_before_gh(
     tmp_path, capsys, monkeypatch
 ):
     repo, other = shares_repo(tmp_path, "migration", "migration")
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: pytest.fail("gh called"))
     rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
     assert rc == 1
@@ -9730,6 +9821,7 @@ def test_r14_start_refuses_beside_a_live_plan_sharing_a_class_before_gh(
 
 def test_r14_start_proceeds_beside_a_live_plan_on_another_class(tmp_path, capsys, monkeypatch):
     repo, _other = shares_repo(tmp_path, "migration", "openapi")
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     view = {"isFork": False, "defaultBranchRef": {"name": "main"}}
     monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: view)
     rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
@@ -9856,6 +9948,7 @@ def test_r14_a_plan_the_shares_check_cannot_read_is_one_line(tmp_path, capsys, m
     """Fix round: another tree's plan that is not UTF-8 is apparatus at check begin and one
     START FAILED line at start, never a traceback."""
     repo, other = shares_repo(tmp_path, "dapi", "dapi")
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
     (other / "prompt_plan.md").write_bytes(b"# plan\n\xff\xfe\n")
     rc, line = next_auto.check_begin(repo, 1, test_cmd=TEST_CMD, lint_cmd=LINT_OK)
     assert rc == 2 and line.startswith("CHECK APPARATUS step 1: ")
@@ -9886,6 +9979,7 @@ def test_r14_a_refused_fix_round_begin_leaves_the_step_done(tmp_path):
 def test_r14_start_refuses_on_a_shares_read_error_with_no_message(tmp_path, capsys, monkeypatch):
     """Round 3: an exception whose text is empty still ends start with one START FAILED line."""
     repo, _other = shares_repo(tmp_path, "dapi", "openapi")
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
 
     def no_text(_root, _plan):
         raise OSError()
@@ -9896,3 +9990,482 @@ def test_r14_start_refuses_on_a_shares_read_error_with_no_message(tmp_path, caps
     [err] = capsys.readouterr().err.strip().splitlines()
     assert rc == 1 and err.startswith("START FAILED: ")
     assert next_auto.find_state_file(repo) is None
+
+
+# ---- the preflight note as a configured requirement (sweep spec R1) ---------------------------
+
+
+def test_merge_skips_the_note_when_the_variable_is_unset(tmp_path, monkeypatch):
+    """A public install has no preflight plugin to write the note: unset, the gate never reads
+    notes and the merge proceeds on the other conditions (sweep spec R1(a))."""
+    monkeypatch.delenv("ADW_PREFLIGHT_NOTE", raising=False)
+    repo, sha = merge_ready(tmp_path)
+    git(repo, "notes", "--ref=preflight", "remove", sha)
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", merge_gh(calls, green_pr(sha)))
+    rc, lines = next_auto.merge_pr(repo, 7, **merge_kwargs())
+    assert (rc, lines) == (0, [f"MERGED PR #7 {MERGE_SHA}"])
+    assert not any("preflight note" in line for line in lines)
+    assert MERGE_ARGV in calls
+
+
+@pytest.mark.parametrize("value", ["yes", "Required", "1"])
+def test_merge_skips_the_note_on_any_value_but_required(tmp_path, monkeypatch, value):
+    """The value is compared exactly: only `required` requires; `Required`, `yes` and `1` do
+    not (sweep spec R1(a))."""
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", value)
+    repo, sha = merge_ready(tmp_path)
+    git(repo, "notes", "--ref=preflight", "remove", sha)
+    monkeypatch.setattr(next_auto, "gh", merge_gh([], green_pr(sha)))
+    rc, lines = next_auto.merge_pr(repo, 7, **merge_kwargs())
+    assert (rc, lines) == (0, [f"MERGED PR #7 {MERGE_SHA}"])
+
+
+def test_merge_with_required_and_a_note_proceeds(tmp_path, monkeypatch):
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", "required")
+    repo, sha = merge_ready(tmp_path)
+    monkeypatch.setattr(next_auto, "gh", merge_gh([], green_pr(sha)))
+    rc, lines = next_auto.merge_pr(repo, 7, **merge_kwargs())
+    assert (rc, lines) == (0, [f"MERGED PR #7 {MERGE_SHA}"])
+
+
+def test_preflight_note_required_reads_the_variable(monkeypatch):
+    monkeypatch.delenv("ADW_PREFLIGHT_NOTE", raising=False)
+    assert next_auto.preflight_note_required() is False
+    monkeypatch.setenv("ADW_PREFLIGHT_NOTE", "required")
+    assert next_auto.preflight_note_required() is True
+    assert next_auto.PREFLIGHT_NOTE_VAR == "ADW_PREFLIGHT_NOTE"
+
+
+# ---- start checks the owner (sweep spec R2) ------------------------------------------------------
+
+
+def test_start_checks_the_owner_after_never_auto_and_before_the_plan(
+    tmp_path, monkeypatch, capsys
+):
+    """The README and CHANGELOG say preflight, start and merge refuse an owner outside the
+    allow-list; start never did. The refusal uses preflight's words, comes after the never-auto
+    refusal and before the plan check, and creates nothing (sweep spec R2)."""
+    repo, _ = make_repo(tmp_path)
+    monkeypatch.setattr(next_auto, "gh_repo_view", lambda _root: pytest.fail("gh called"))
+    # a foreign owner is refused with preflight's words and nothing is created
+    git(repo, "remote", "set-url", "origin", "https://github.com/other-org/x.git")
+    rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
+    assert rc == 1
+    assert capsys.readouterr().err.strip() == (
+        "START FAILED: origin owner is 'other-org', not one of acme, ryanmat; "
+        "auto runs only in repos they own"
+    )
+    assert not (repo / ".next-auto").exists()
+    # the never-auto refusal still comes first
+    monkeypatch.setattr(next_auto, "NEVER_AUTO", frozenset({"other-org/x"}))
+    rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
+    assert rc == 1
+    err = capsys.readouterr().err.strip()
+    assert err == "START FAILED: other-org/x is never an unattended target"
+    # an allowed owner proceeds to the plan check, as today
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/x.git")
+    (repo / "prompt_plan.md").write_text(PLAN.replace("- Test: uv run pytest\n", ""))
+    git(repo, "commit", "-qam", "plan without Test")
+    rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
+    err = capsys.readouterr().err.strip()
+    assert rc == 1 and err.startswith("START FAILED: ") and "origin owner" not in err
+    assert not hasattr(next_auto, "has_open_next_auto_pr")
+    # a foreign owner in front of that same invalid plan is refused on the owner, so the owner
+    # check runs before check_plan (the Chunk A review's Important finding: without this phase
+    # the owner block moved below check_plan survives); other-org/y is outside NEVER_AUTO above
+    git(repo, "remote", "set-url", "origin", "https://github.com/other-org/y.git")
+    rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
+    assert rc == 1
+    assert capsys.readouterr().err.strip() == (
+        "START FAILED: origin owner is 'other-org', not one of acme, ryanmat; "
+        "auto runs only in repos they own"
+    )
+
+
+# ---- boundary-commit commits the plan alone (sweep spec R3) ---------------------------------
+
+# Fixture shape: this repository's plan at fe82d67 (read 2026-11-04), two chunks with the
+# first chunk's steps DONE, cut to three steps; the boundary commit's subject there was
+# `docs(plan): record the Chunk A review findings and the engine build Handoff`, by hand.
+CHUNKED_PLAN = PLAN.replace(
+    "### Step 1: first\nStatus: PENDING",
+    "## Chunk A: the first\n\n### Step 1: first\nStatus: DONE (committed)",
+).replace(
+    "### Step 2: second\nStatus: PENDING",
+    "## Chunk B: the second\n\n### Step 2: second\nStatus: PENDING",
+)
+
+
+def chunked_repo(tmp_path):
+    """make_repo with the chunked plan committed, so Step 1 is DONE under Chunk A."""
+    repo, origin = make_repo(tmp_path)
+    (repo / "prompt_plan.md").write_text(CHUNKED_PLAN)
+    git(repo, "commit", "-qam", "chunked plan")
+    return repo, origin
+
+
+def append_finding(repo, entry):
+    """A Findings entry through the plan tool's own appender, as the loop writes one."""
+    path = repo / "prompt_plan.md"
+    path.write_bytes(next_plan.append_section_bytes(path.read_bytes(), "findings", entry))
+
+
+def test_boundary_commit_commits_the_plan_with_the_last_done_steps_chunk(tmp_path, capsys):
+    """With only the plan modified, boundary-commit commits it as `docs(plan): record the
+    Chunk <label> review findings`, the chunk being the last DONE step's (sweep spec R3)."""
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "Chunk A review round 1 (Minor): a nit")
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert sha != before
+    assert out.out.strip() == f"COMMIT {sha}"
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "docs(plan): record the Chunk A review findings"
+    )
+    assert git(repo, "show", "--stat", "--format=", "HEAD").stdout.count("|") == 1
+    assert git(repo, "status", "--porcelain").stdout == ""
+    # once a step of Chunk B is DONE, the subject names Chunk B: the last DONE step, not the first
+    (repo / "prompt_plan.md").write_text(
+        (repo / "prompt_plan.md").read_text().replace(
+            "### Step 2: second\nStatus: PENDING", "### Step 2: second\nStatus: DONE (committed)"
+        )
+    )
+    git(repo, "commit", "-qam", "step 2 done")
+    append_finding(repo, "Chunk B review round 1 (Minor): another nit")
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    capsys.readouterr()
+    assert rc == 0
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "docs(plan): record the Chunk B review findings"
+    )
+
+
+def test_boundary_commit_takes_a_title_and_an_unchunked_plan_has_a_fixed_subject(
+    tmp_path, capsys
+):
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    title = "record the 12:53 rulings"
+    rc = next_auto.main(["--root", str(repo), "boundary-commit", "--title", title])
+    capsys.readouterr()
+    assert rc == 0
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == f"docs(plan): {title}"
+    # make_repo's plan has no chunks: the default subject is the fixed one
+    (repo / "prompt_plan.md").write_text(PLAN)
+    git(repo, "commit", "-qam", "unchunked plan")
+    append_finding(repo, "another finding")
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    capsys.readouterr()
+    assert rc == 0
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "docs(plan): record the review findings"
+    )
+
+
+def test_boundary_commit_refuses_a_title_with_a_conventional_prefix(tmp_path, capsys):
+    """The refusal is commit_step's, word for word, so one rule reads both commands."""
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    rc = next_auto.main(["--root", str(repo), "boundary-commit", "--title", "docs(plan): x"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == (
+        'COMMIT REFUSED boundary: the title already carries a conventional prefix '
+        '("docs(plan): "); pass the subject only'
+    )
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    assert git(repo, "status", "--porcelain").stdout.strip() == "M prompt_plan.md"
+
+
+def test_boundary_commit_refuses_an_unchanged_plan(tmp_path, capsys):
+    repo, _ = chunked_repo(tmp_path)
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == "COMMIT REFUSED boundary: the plan has no change"
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == before
+
+
+# ---- boundary-commit refuses anything beyond the plan and the record (sweep spec R3) ---------
+
+
+def boundary_refused(repo, capsys):
+    """Run boundary-commit expecting a refusal; returns the stderr line with HEAD unmoved and
+    the index as it was."""
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    staged_before = git(repo, "diff", "--cached", "--name-only").stdout
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert rc == 1, out
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == before
+    assert git(repo, "diff", "--cached", "--name-only").stdout == staged_before
+    return out.err.strip()
+
+
+BEYOND = "; only the plan and the record may change"
+
+
+def test_boundary_commit_refuses_a_modified_file_beside_the_plan(tmp_path, capsys):
+    """A source change beside the plan is a step's work, not the boundary's; a stray `.md` is
+    refused the same way, since only the record's own path is admitted."""
+    repo, _ = chunked_repo(tmp_path)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "notes.md").write_text("# notes\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "notes")
+    append_finding(repo, "a finding")
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 2\n")
+    assert boundary_refused(repo, capsys) == f"COMMIT REFUSED boundary: src.py is modified{BEYOND}"
+    git(repo, "checkout", "--", "src.py")
+    (repo / "docs" / "notes.md").write_text("# notes\n\nmore\n")
+    assert boundary_refused(repo, capsys) == (
+        f"COMMIT REFUSED boundary: docs/notes.md is modified{BEYOND}"
+    )
+
+
+def test_boundary_commit_refuses_an_untracked_file(tmp_path, capsys):
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    (repo / "new.txt").write_text("stray\n")
+    assert boundary_refused(repo, capsys) == (
+        f"COMMIT REFUSED boundary: new.txt is untracked{BEYOND}"
+    )
+
+
+def test_boundary_commit_refuses_a_file_staged_by_hand(tmp_path, capsys):
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 2\n")
+    git(repo, "add", "src.py")
+    assert boundary_refused(repo, capsys) == f"COMMIT REFUSED boundary: src.py is staged{BEYOND}"
+
+
+def test_boundary_commit_refuses_a_live_run(tmp_path, capsys):
+    """A run marker under .next-auto/<run-id>/ means a run owns the plan; the boundary commit
+    is the attended loop's and never runs beside one."""
+    repo, _ = chunked_repo(tmp_path)
+    append_finding(repo, "a finding")
+    marker = repo / next_auto.RUN_SUBDIR / "20261104-live01" / "state.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({"run_id": "20261104-live01", "run_dir": str(marker.parent)}))
+    assert boundary_refused(repo, capsys) == "COMMIT REFUSED boundary: a run is live"
+
+
+def test_boundary_commit_commits_the_record_beside_the_plan(tmp_path, capsys):
+    """With Record in Conventions the record's pending line rides in the boundary commit, as
+    the attended loop's commit N carries it, and nothing else does."""
+    repo, _control = record_repo(tmp_path)
+    append_finding(repo, "a finding")
+    with (repo / RECORD_FILE).open("a") as fh:
+        fh.write("- step.done 1 (pending)\n")
+    rc = next_auto.main(["--root", str(repo), "boundary-commit"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    files = git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+    assert sorted(files) == sorted(["prompt_plan.md", RECORD_FILE])
+    assert git(repo, "status", "--porcelain").stdout == ""
+
+
+# ---- check_plan carries validate's warnings (carries spec R13, its 3(b) and 3(c); Step 13) -----
+# validate warns at plan time about a step that names a gate-config stem without its basename;
+# the warning reaches the operator through preflight once, and never turns a pass into a refusal.
+
+PYPROJECT_WARNING = (
+    "Step 2: names pyproject without its basename pyproject.toml; the gate authorizes a "
+    "config edit only when the step text contains the basename"
+)
+
+
+def _warning_repo(tmp_path):
+    repo, origin = make_repo(tmp_path)
+    (repo / "prompt_plan.md").write_text(
+        PLAN.replace("Second step.", "Add httpx to the pyproject's dependency list.")
+    )
+    git(repo, "commit", "-am", "a step that names the stem alone")
+    git(repo, "push", "origin", "main")
+    git(repo, "fetch", "origin")
+    return repo, origin
+
+
+def test_check_plan_returns_refusals_and_warnings_as_a_pair(tmp_path):
+    repo, _ = make_repo(tmp_path)
+    assert next_auto.check_plan(repo, Path("prompt_plan.md")) == ([], [])
+    (repo / "prompt_plan.md").write_text(
+        PLAN.replace("Second step.", "Add httpx to the pyproject's dependency list.")
+    )
+    assert next_auto.check_plan(repo, Path("prompt_plan.md")) == ([], [PYPROJECT_WARNING])
+    (repo / "prompt_plan.md").write_text(PLAN.replace("Status: PENDING", "Status: MAYBE", 1))
+    refusals, warnings = next_auto.check_plan(repo, Path("prompt_plan.md"))
+    assert refusals == [
+        "plan does not validate (run next_plan.py validate for line-numbered reasons)"
+    ]
+    assert warnings == []
+    assert next_auto.check_plan(repo, Path("missing_plan.md")) == (
+        [f"no plan at {repo / 'missing_plan.md'}"],
+        [],
+    )
+
+
+def test_preflight_checks_passes_a_plan_that_only_warns(tmp_path):
+    repo, _ = _warning_repo(tmp_path)
+    assert next_auto.preflight_checks(repo, repo / "prompt_plan.md", **base_kwargs()) == []
+
+
+def test_preflight_cli_prints_each_warning_once_and_start_prints_none(
+    tmp_path, monkeypatch, capsys
+):
+    repo, _ = _warning_repo(tmp_path)
+    git(repo, "remote", "set-url", "origin", "https://github.com/ryanmat/thing.git")
+    monkeypatch.setattr(
+        next_auto,
+        "gh_repo_view",
+        lambda _root: {"isFork": False, "defaultBranchRef": {"name": "main"}},
+    )
+    monkeypatch.setattr(next_auto, "list_next_auto_prs", lambda _root: ([], ""))
+    monkeypatch.setattr(next_auto, "gh", lambda *_a, **_k: "")
+    rc = next_auto.main(["--root", str(repo), "preflight", "prompt_plan.md"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert out.out.strip().splitlines() == ["PREFLIGHT OK"]
+    assert out.err.strip().splitlines() == [f"PREFLIGHT WARN {PYPROJECT_WARNING}"]
+
+    rc = next_auto.main(["--root", str(repo), "start", "prompt_plan.md", "--no-sync"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert "WARN" not in out.err and "WARN" not in out.out
+
+
+# ---- the hand-back without a pull request (carries spec R11, Step 16 of the 3.5.9 engine plan) --
+# Seven factory nights pushed a branch and opened a pull request that carried no step,
+# only the hand-back's Decisions entry. A run that committed no step now ends locally.
+
+NO_PR_LINE = "NO PR: no step committed"
+
+
+def _no_step_run(tmp_path):
+    """A run whose first step hands back with nothing committed: started, step 1 begun,
+    blocked on a decision, no commit on the run branch."""
+    repo, origin = make_repo(tmp_path)
+    state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
+    next_auto.step_begin(repo, 1)
+    next_auto.append_plan(repo, "decisions", "Step 1: sqlite or json?")
+    next_auto.set_step(repo, 1, "blocked-decision", "sqlite or json?")
+    return repo, origin, state
+
+
+def test_wrap_up_cli_hands_back_without_a_push_or_a_pr_when_no_step_is_committed(
+    tmp_path, monkeypatch, capsys
+):
+    repo, origin, _state = _no_step_run(tmp_path)
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh_visibility(calls, private=True))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    rc = next_auto.main(["--root", str(repo), "wrap-up"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    lines = out.out.splitlines()
+    assert len(lines) == 1 and lines[0].endswith(f" {NO_PR_LINE}"), lines
+    assert lines[0].startswith("RUN STOPPED BLOCKED (decision) at step 1")
+    assert calls == []
+    refs = subprocess.run(
+        ["git", "-C", str(origin), "for-each-ref", "refs/heads/next-auto/"],
+        capture_output=True, text=True,
+    ).stdout
+    assert refs == ""
+
+
+def test_wrap_up_no_pr_result_has_an_empty_url_and_the_summary_says_so(tmp_path, monkeypatch):
+    repo, _origin, state = _no_step_run(tmp_path)
+    monkeypatch.setattr(next_auto, "gh", fake_gh([]))
+    result = next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    assert result["pr_url"] == "" and result["pr_number"] is None
+    assert result["reason"].startswith("BLOCKED (decision) at step 1")
+    summary = (Path(state["run_dir"]) / "summary.md").read_text()
+    head = summary.split("### Steps", 1)[0]
+    assert "- No pull request: the run committed no step" in head.splitlines()
+    assert "sqlite or json?" in summary
+
+
+def test_wrap_up_no_pr_deletes_the_marker_so_the_guard_stands_down(tmp_path, monkeypatch):
+    repo, _origin, state = _no_step_run(tmp_path)
+    assert next_auto.find_state_file(repo) is not None
+    monkeypatch.setattr(next_auto, "gh", fake_gh([]))
+    next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    assert next_auto.find_state_file(repo) is None
+    assert not (Path(state["run_dir"]) / "state.json").exists()
+    # with one committed step the run still pushes and opens the PR:
+    # test_wrap_up_commits_plan_pushes_opens_pr_and_disarms above is that case
+
+
+# ---- the hand-back brings the plan home (carries spec R11 and R16, sweep spec R7; Step 17) -----
+
+STREAM_STOP_RE = re.compile(r"^RUN STOPPED (.+?)(?: PR #(\d+))?$", re.M)
+
+
+def test_no_pr_hand_back_writes_an_untracked_plan_back_to_the_root(tmp_path, monkeypatch):
+    """The hand-back's Decisions entry and the BLOCKED status must reach the next preflight,
+    exactly as the pull-request path brings them home."""
+    repo, _ = make_untracked_plan_repo(tmp_path)
+    root_before = (repo / "prompt_plan.md").read_bytes()
+    state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
+    wt = Path(state["worktree"])
+    next_auto.step_begin(repo, 1, test_cmd=TEST_CMD)
+    next_auto.append_plan(repo, "decisions", "Step 1: sqlite or json?")
+    next_auto.set_step(repo, 1, "blocked-decision", "sqlite or json?")
+    assert (repo / "prompt_plan.md").read_bytes() == root_before
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh(calls))
+    result = next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    assert result["pr_url"] == "" and calls == []
+    root_after = (repo / "prompt_plan.md").read_bytes()
+    assert root_after == (wt / "prompt_plan.md").read_bytes()
+    text = root_after.decode()
+    assert "Status: BLOCKED (decision: sqlite or json?)" in text
+    assert "- Step 1: sqlite or json? [run 20260911-abc123]" in text
+
+
+def test_no_pr_hand_back_leaves_a_tracked_plans_commit_and_the_worktree_in_place(
+    tmp_path, monkeypatch
+):
+    repo, _origin, state = _no_step_run(tmp_path)
+    wt, branch = Path(state["worktree"]), state["branch"]
+    monkeypatch.setattr(next_auto, "gh", fake_gh([]))
+    next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    subjects = git(repo, "log", "--format=%s", f"main..{branch}").stdout.splitlines()
+    assert subjects == ["chore(plan): record run 20260911-abc123 step states"]
+    assert "Status: BLOCKED (decision: sqlite or json?)" in git(
+        repo, "show", f"{branch}:prompt_plan.md"
+    ).stdout
+    assert str(wt.resolve()) in git(repo, "worktree", "list").stdout
+    assert wt.is_dir()
+
+
+def test_no_pr_hand_back_runs_the_record_commit_and_sync_and_appends_no_pr_opened(
+    tmp_path, monkeypatch
+):
+    repo, wt, control = record_run(tmp_path, approved=True)
+    next_auto.set_step(repo, 1, "blocked-decision", "which store?")
+    monkeypatch.setattr(next_auto, "gh", fake_gh([]))
+    result = next_auto.wrap_up(repo, repo_slug="ryanmat/fixture")
+    assert result["pr_url"] == ""
+    [sync] = [c for c in stub_calls(control) if c["argv"][0] == "sync"]
+    assert sync["argv"] == ["sync", RECORD_SLUG] and Path(sync["cwd"]) == wt.resolve()
+    assert appends(control) == []
+    assert "pr.opened" not in (wt / RECORD_FILE).read_text()
+
+
+def test_factory_stream_regex_reads_the_no_pr_line_with_an_empty_pr_group():
+    """factory/stream.py's form, quoted from the carries spec's 1(d) (read 2026-11-03): the
+    dark factory books a hand-back night as ok with no pr_number."""
+    assert next_auto.NO_PR_SUFFIX == NO_PR_LINE
+    m = STREAM_STOP_RE.search(f"RUN STOPPED BLOCKED (decision) at step 1 {NO_PR_LINE}\n")
+    assert m and m.group(2) is None
+    assert m.group(1) == f"BLOCKED (decision) at step 1 {NO_PR_LINE}"
+    m = STREAM_STOP_RE.search("RUN STOPPED completed PR #7\nhttps://x/pull/7\n")
+    assert m and m.group(2) == "7" and m.group(1) == "completed"

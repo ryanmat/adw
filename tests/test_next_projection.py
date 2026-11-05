@@ -10,7 +10,6 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 
 import next_plan
@@ -892,124 +891,65 @@ def test_a_ruling_line_the_parser_cannot_read_stops_the_build_naming_file_and_li
     assert str(exc.value) == f".next-auto/rulings/{STORE_FILE}:1: {first}"
 
 
-# Ledger fixtures. closeout.jsonl: the three lines of session a59e6503 in a live `closeout_ledger.py
-# --root ~/.claude/projects --since 2026-10-22 --jsonl` read 2026-10-22 23:10:43 EDT, its
-# parent rows on two UTC days and one subagent run under it. night-ledger.jsonl:
-# /var/lib/acme-night/ledger.jsonl on devbox, the 2026-10-20 canary line, read then.
-CLOSEOUT = FIXTURES / "projection" / "closeout.jsonl"
-NIGHT = FIXTURES / "projection" / "night-ledger.jsonl"
-FABLE_RUN = "run:a59e6503-7573-4372-91d0-90fe905a6c25"
-NIGHT_RUN = "run:d8bb5538-5352-4dc2-ab8c-4673ba8ff36a"
+# The close-out and factory ledgers, sources (f) and (g) of Requirement 10, were retired on
+# 2026-11-04 by rul-8a9c3bd6ee (sweep spec R5): build takes no ledger argument, the store carries
+# no closeout or factory watermark, and no cost node or spentIn edge, which those two sources
+# alone produced; every query still answers over the pulls store.
+LEDGER_FLAGS = ("--closeout-jsonl", "--factory-ledger")
 
 
-def ledger_copies(tmp_path):
-    copies = {}
-    for name, src in (("closeout", CLOSEOUT), ("night", NIGHT)):
-        dst = tmp_path / "ledgers" / src.name
-        dst.parent.mkdir(exist_ok=True)
-        dst.write_bytes(src.read_bytes())
-        os.utime(dst, (PLAN_MTIME, PLAN_MTIME))
-        copies[name] = dst
-    return copies
-
-
-def built_ledgers(tmp_path, closeout=(), factory=()):
-    project = tmp_path / "project"
-    target = git_repo(tmp_path / "target")
-    next_projection.build(target, project, closeout=closeout, factory=factory)
-    return sqlite3.connect(store_of(project))
-
-
-def spent_in(conn, run):
-    rows = conn.execute(
-        "SELECT src FROM edge WHERE type = 'spentIn' AND dst = ? AND method = 'observed'", (run,)
-    ).fetchall()
-    return {src for (src,) in rows}
-
-
-def test_a_closeout_line_gives_a_cost_by_session_day_and_model_spent_in_its_run(tmp_path):
-    conn = built_ledgers(tmp_path, closeout=(CLOSEOUT,))
-    assert nodes(conn, "cost") == {
-        "a59e6503-7573-4372-91d0-90fe905a6c25/2026-10-22/claude-fable-5-1",
-        "a59e6503-7573-4372-91d0-90fe905a6c25/2026-10-23/claude-fable-5-1",
-        "agent-aokta-spec-review-8ca3cb47035e7972/2026-10-22/claude-opus-5-5",
-    }
-    # a subagent run's cost is spent in its parent session's run
-    assert spent_in(conn, FABLE_RUN) == {f"cost:{key}" for key in nodes(conn, "cost")}
-    props = node_props(
-        conn, "cost", "a59e6503-7573-4372-91d0-90fe905a6c25/2026-10-22/claude-fable-5-1"
-    )
-    assert props["cost_usd"] == "49.62200775"
-    sub = node_props(
-        conn, "cost", "agent-aokta-spec-review-8ca3cb47035e7972/2026-10-22/claude-opus-5-5"
-    )
-    assert (sub["cost_usd"], sub["subagent_type"]) == ("4.3250140", "general-purpose")
-
-
-def test_a_night_ledger_line_gives_a_cost_joined_to_its_run_by_session_id(tmp_path):
-    conn = built_ledgers(tmp_path, factory=(NIGHT,))
-    assert nodes(conn, "cost") == {"d8bb5538-5352-4dc2-ab8c-4673ba8ff36a"}
-    props = node_props(conn, "cost", "d8bb5538-5352-4dc2-ab8c-4673ba8ff36a")
-    assert (props["cost_usd"], props["at"]) == ("1.7135182000000002", "2026-10-20T20:43:21Z")
-    assert (
-        props["plan_sha256"] == "3a84989670001ad1e6659a885118e5a467b9ab363451bf500189a71d412b965d"
-    )
-    assert spent_in(conn, NIGHT_RUN) == {"cost:d8bb5538-5352-4dc2-ab8c-4673ba8ff36a"}
-
-
-def test_a_ledger_path_that_does_not_exist_marks_its_source_stale_and_the_build_goes_on(tmp_path):
-    copies = ledger_copies(tmp_path)
+@pytest.mark.parametrize("flag", LEDGER_FLAGS)
+def test_build_refuses_the_retired_ledger_arguments(tmp_path, flag):
     target = git_repo(tmp_path / "target")
     project = tmp_path / "project"
-    common = ("build", "--target", str(target), "--project", str(project))
-    r = run_script(
-        *common,
-        "--closeout-jsonl",
-        str(copies["closeout"]),
-        "--factory-ledger",
-        str(copies["night"]),
-    )
-    assert (r.returncode, r.stderr) == (0, "")
-    missing = tmp_path / "ledgers" / "gone.jsonl"
-    r = run_script(
-        *common, "--closeout-jsonl", str(copies["closeout"]), "--factory-ledger", str(missing)
-    )
-    assert (r.returncode, r.stdout) == (0, f"BUILT {store_of(project)}\n")
-    assert f"factory ledger unreadable, kept stale: {missing}" in r.stderr
-    assert "Traceback (most recent call last)" in r.stderr
-    assert next_projection.status_lines(project) == [
-        "closeout 2026-10-22T02:52:55Z",
-        "factory 2026-10-20T20:43:21Z stale",
-    ]
-    conn = sqlite3.connect(store_of(project))
-    # the night cost of the build that read the ledger is carried (rul-fade447316)
-    assert spent_in(conn, NIGHT_RUN) == {"cost:d8bb5538-5352-4dc2-ab8c-4673ba8ff36a"}
-    assert len(spent_in(conn, FABLE_RUN)) == 3
+    ledger = tmp_path / "ledger.jsonl"
+    r = run_script("build", "--target", str(target), "--project", str(project), flag, str(ledger))
+    assert r.returncode == 2
+    assert f"unrecognized arguments: {flag}" in r.stderr
+    assert not store_of(project).exists()
 
 
-def test_costs_summed_per_run_are_the_exact_decimal_sum(tmp_path):
-    conn = built_ledgers(tmp_path, closeout=(CLOSEOUT,), factory=(NIGHT,))
-    costs = [
-        node_props(conn, "cost", src.removeprefix("cost:"))["cost_usd"]
-        for src in spent_in(conn, FABLE_RUN)
-    ]
-    lines = [json.loads(ln)["cost_usd"] for ln in CLOSEOUT.read_text(encoding="utf-8").splitlines()]
-    assert sorted(costs) == sorted(lines)
-    assert sum(map(Decimal, costs)) == Decimal("49.62200775") + Decimal("21.83910675") + Decimal(
-        "4.3250140"
-    )
-    assert sum(map(Decimal, costs)) == Decimal("75.78612850")
+def test_the_store_holds_no_ledger_watermark_and_no_cost_node(tmp_path):
+    conn = built_pulls(tmp_path, specs=("slack-demo-surface.md",))
+    sources = {s for (s,) in conn.execute("SELECT source FROM watermarks")}
+    assert sources and not sources & {"closeout", "factory"}
+    assert conn.execute("SELECT count(*) FROM node WHERE type = 'cost'").fetchone() == (0,)
+    assert conn.execute("SELECT count(*) FROM edge WHERE type = 'spentIn'").fetchone() == (0,)
+    for name in ("ingest_closeout", "ingest_factory", "read_ledgers", "ledger_rows"):
+        assert not hasattr(next_projection, name), name
 
 
-def test_a_cost_written_as_a_json_number_stops_the_build_naming_the_line(tmp_path):
-    line = NIGHT.read_text(encoding="utf-8").splitlines()[0]
-    number = line.replace('"cost_usd": "1.7135182000000002"', '"cost_usd": 1.7135182000000002')
-    assert number != line
-    ledger = tmp_path / "night.jsonl"
-    ledger.write_text(number + "\n", encoding="utf-8")
-    with pytest.raises(next_projection.ProjectionError) as exc:
-        built_ledgers(tmp_path, factory=(ledger,))
-    assert str(exc.value) == f"{ledger}:1: {number}"
+# one argument shape per query subcommand, each answerable over the pulls store: #591 serves
+# intent 30.10, implements slack-demo-surface and merged as MERGE591
+QUERY_SHAPES = [
+    ("entity", PR591),
+    ("find", "591"),
+    ("neighbors", PR591),
+    ("path", PR591, f"commit:{MERGE591}"),
+    ("timeline", PR591),
+    ("intent", "30.10"),
+    ("coverage", "slack-demo-surface"),
+]
+
+
+@pytest.mark.parametrize("shape", QUERY_SHAPES, ids=[s[0] for s in QUERY_SHAPES])
+def test_every_query_still_answers_over_the_pulls_store_as_text(tmp_path, shape):
+    built_pulls(tmp_path, specs=("slack-demo-surface.md",))
+    r = run_script("query", *shape, "--text", "--project", str(tmp_path / "project"))
+    assert (r.returncode, r.stderr) == (0, ""), r.stderr
+    assert r.stdout.strip(), shape[0]
+
+
+def test_query_landed_still_answers(tmp_path):
+    """The eighth subcommand needs a Handoff day, so it answers over the landed project; it
+    prints the table as lines and takes no --text."""
+    project = landed_project(tmp_path)
+    same = "c138ffc1150f7604c9a126c071226b4927579874"
+    handoff = project / "docs" / "handoff" / "2026-10-24.md"
+    handoff.write_text(f"## Landed\nSince: {same}\nUntil: {same}\n", encoding="utf-8")
+    r = run_script("query", "landed", "--date", "2026-10-24", "--project", str(project))
+    assert (r.returncode, r.stderr) == (0, ""), r.stderr
+    assert r.stdout.startswith("| PR | Title | Merged | Run | Conclusion | Intent |")
 
 
 def source_rows(store, source):

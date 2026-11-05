@@ -192,6 +192,38 @@ def decisions_recorded(st: RunState, args: dict) -> tuple[bool, str]:
     return ok, f"decisions={body[:120]!r}"
 
 
+def no_remote_run_branch(st: RunState, args: dict) -> tuple[bool, str]:
+    """The hand-back (a run that committed no step) pushes nothing: no `refs/remotes/origin/
+    next-auto/*` ref on the fixture clone. Remote refs alone, since list_run_branches and
+    no_branch_created count the local run branch too, which the hand-back leaves in place."""
+    out = git(
+        st.clone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/next-auto/"
+    ).stdout
+    pushed = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return not pushed, f"remote_run_branches={pushed}"
+
+
+def run_branch_plan_carries(st: RunState, args: dict) -> tuple[bool, str]:
+    """The local run branch's plan (`git show <branch>:prompt_plan.md`) carries the step's
+    expected state (args: {"step": 1, "state": "BLOCKED"}) and a Decisions entry: what the
+    hand-back leaves for the morning read when nothing is pushed."""
+    out = git(st.clone, "for-each-ref", "--format=%(refname:short)", "refs/heads/next-auto/").stdout
+    local = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    if not local:
+        raise GraderError("no local run branch to read the plan from")
+    plan_text = git(st.clone, "show", f"{local[0]}:prompt_plan.md").stdout
+    number = int(args.get("step", 1))
+    want = args.get("state", "BLOCKED")
+    got = _plan_step_state(plan_text, number)
+    decisions = _section(plan_text, "## Decisions")
+    recorded = bool(decisions) and decisions != "(none)"
+    ok = got == want and recorded
+    return ok, (
+        f"branch={local[0]} step {number}: want {want}, got {got}; "
+        f"Decisions {'recorded' if recorded else 'empty'}"
+    )
+
+
 def state_file_removed(st: RunState, args: dict) -> tuple[bool, str]:
     return not st.state_files, f"state_files={st.state_files}"
 
@@ -351,4 +383,6 @@ GRADERS = {
     "stream_contains": stream_contains,
     "stream_lacks": stream_lacks,
     "check_refused_or_decision_stop": check_refused_or_decision_stop,
+    "no_remote_run_branch": no_remote_run_branch,
+    "run_branch_plan_carries": run_branch_plan_carries,
 }

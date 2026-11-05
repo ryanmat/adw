@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 12):  # noqa: UP036  (the guard runs below the floor by design)
+    sys.stderr.write(
+        f"adw: python3 is {sys.version_info[0]}.{sys.version_info[1]}; "
+        "the plugin needs 3.12 or later on PATH\n"
+    )
+    sys.exit(2)
+
 import hashlib
 import json
 import os

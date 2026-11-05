@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-# Description: One evidence record for both eval substrates: converts a plugin-eval
-# Description: aggregate-result.json or a next-auto summary into d6-record/1 lines and the ledger.
+# Description: One evidence record for the next-auto eval: converts a run summary into
+# Description: d6-record/1 lines and appends the shared ledger (evals/ledger.jsonl).
 
 from __future__ import annotations
 
-import argparse
 import json
 import socket
 import subprocess
-import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -113,149 +111,6 @@ def resolve_plugin(
 # ---- plugin eval -------------------------------------------------------------
 
 
-def _case_tags(tags, case_name: str) -> list[str]:
-    if isinstance(tags, dict):
-        return list(tags.get(case_name, []))
-    return list(tags or [])
-
-
-def _run_passed(run: dict) -> bool:
-    if run.get("error") or run.get("aborted"):
-        return False
-    graders = [g for g in run.get("graders", []) if g.get("scored", True)]
-    return bool(graders) and all(g.get("passed") for g in graders)
-
-
-def _run_score(run: dict) -> Decimal:
-    graders = [g for g in run.get("graders", []) if g.get("scored", True)]
-    if not graders or run.get("error") or run.get("aborted"):
-        return Decimal(0)
-    weight = sum(Decimal(str(g.get("weight", 1))) for g in graders)
-    won = sum(Decimal(str(g.get("weight", 1))) for g in graders if g.get("passed"))
-    return won / weight if weight else Decimal(0)
-
-
-def _case_cost(case: dict, per_run: list[dict]) -> str | None:
-    """The CLI reports costUsd per run; the case cost is the sum over every arm the pass ran
-    (a with-without ablation bills both), unless the aggregate carries a case-level figure."""
-    explicit = case.get("costUsd", case.get("aggregates", {}).get("costUsd"))
-    if explicit is not None:
-        return _money(explicit)
-    arms = case.get("arms") or {}
-    if arms:
-        costs = [
-            Decimal(str(run["costUsd"]))
-            for arm in arms.values()
-            for run in arm
-            if run.get("costUsd") is not None
-        ]
-    else:
-        costs = [Decimal(r["cost_usd"]) for r in per_run if r.get("cost_usd") is not None]
-    return str(sum(costs)) if costs else None
-
-
-def _without_arm(case: dict) -> tuple[str | None, str | None]:
-    """(score_without, ablation_delta) for a with-without pass, else (None, None); the
-    delta is the with score minus the without score, the skill's measured contribution."""
-    if "without" not in (case.get("arms") or {}):
-        return None, None
-    agg = case.get("aggregates", {})
-    score, without = _money(agg.get("score")), _money(agg.get("scoreWithout"))
-    if score is None or without is None:
-        return without, None
-    return without, str(Decimal(score) - Decimal(without))
-
-
-def from_plugin_eval(
-    path: Path,
-    target: str,
-    tags=None,
-    *,
-    model: str | None = None,
-    judge_model: str | None = None,
-    ablation: str = "none",
-    suite: str | None = None,
-    machine: str | None = None,
-    installed_plugins_path: Path | None = None,
-    skills_dir: Path | None = None,
-    plugin: dict | None = None,
-) -> list[dict]:
-    """One record per case from a plugin-eval aggregate. `plugin` is the target identity
-    resolved when the pass was staged; a caller that has it passes it, because the target
-    can change on disk while a pass runs and the record must name what actually ran."""
-    path = Path(path)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    version = data.get("schemaVersion")
-    if version != SUPPORTED_AGGREGATE_SCHEMA:
-        raise RecordError(f"{path.name}: schemaVersion {version} is not supported (want 1)")
-    if plugin is None:
-        plugin = resolve_plugin(target, installed_plugins_path, skills_dir=skills_dir)
-    partial = bool(data.get("partial"))
-    ran_at = _now()
-    records = []
-    for case in data.get("cases", []):
-        name = case["name"]
-        runs = case.get("arms", {}).get("with", [])
-        per_run = []
-        for run in runs:
-            per_run.append(
-                {
-                    "pass": _run_passed(run),
-                    "score": str(_run_score(run)),
-                    "cost_usd": _money(run.get("costUsd")),
-                    "judge_cost_usd": _money(run.get("judgeCostUsd")),
-                    "turns": run.get("turns"),
-                    "duration_s": run.get("durationSeconds"),
-                    "error": run.get("error"),
-                    "aborted": run.get("aborted"),
-                    "skipped_paid_graders": bool(run.get("skippedPaidGraders")),
-                    "graders": [
-                        {
-                            "name": g.get("name"),
-                            "type": g.get("type"),
-                            "passed": g.get("passed"),
-                            "scored": g.get("scored", True),
-                            "weight": g.get("weight", 1),
-                            "detail": g.get("explanation"),
-                        }
-                        for g in run.get("graders", [])
-                    ],
-                }
-            )
-        case_tags = _case_tags(tags, name)
-        comparable = not any(r["skipped_paid_graders"] for r in per_run)
-        all_passed = bool(per_run) and all(r["pass"] for r in per_run)
-        score_without, ablation_delta = _without_arm(case)
-        records.append(
-            {
-                "schema": SCHEMA,
-                "ran_at": ran_at,
-                "machine": machine or socket.gethostname(),
-                "substrate": "plugin-eval",
-                "suite": suite or (case_tags[0] if case_tags else name.split("--")[0]),
-                "case": name,
-                "tags": case_tags,
-                "runs": len(per_run),
-                "per_run": per_run,
-                "score": _money(case.get("aggregates", {}).get("score")),
-                "pass_k": all_passed and comparable and "consistency" in case_tags,
-                "cost_usd": _case_cost(case, per_run),
-                "score_without": score_without,
-                "ablation_delta": ablation_delta,
-                "claude_version": data.get("claudeVersion"),
-                "plugin": plugin,
-                "model": model,
-                "judge_model": judge_model,
-                "ablation": ablation,
-                "result_path": result_path(path),
-                "partial": partial,
-                "partial_reason": data.get("partialReason"),
-                "comparable": comparable,
-            }
-        )
-    return records
-
-
 # ---- next-auto ---------------------------------------------------------------
 
 
@@ -355,39 +210,6 @@ def append(ledger_path: Path, records: list[dict]) -> None:
 CORRECTION_SCHEMA = "d6-ledger-correction/1"
 
 
-def append_correction(
-    ledger_path: Path, *, supersedes: str, superseded_by: str, reason: str
-) -> None:
-    """Records are never edited. A correction is one more line naming the stale batch by the
-    `ran_at` prefix its lines share and the batch that replaces it; readers drop the former."""
-    line = {
-        "schema": CORRECTION_SCHEMA,
-        "ran_at": _now(),
-        "supersedes": supersedes,
-        "superseded_by": superseded_by,
-        "reason": reason,
-    }
-    with Path(ledger_path).open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(line, sort_keys=True) + "\n")
-
-
-def effective_records(ledger_path: Path) -> list[dict]:
-    """The d6-record/1 lines that still stand: every record whose `ran_at` starts with a
-    superseded batch prefix is dropped, summaries and corrections are not records."""
-    lines = [
-        json.loads(ln)
-        for ln in Path(ledger_path).read_text(encoding="utf-8").splitlines()
-        if ln.strip()
-    ]
-    superseded = [d["supersedes"] for d in lines if d.get("schema") == CORRECTION_SCHEMA]
-    return [
-        d
-        for d in lines
-        if d.get("schema") == SCHEMA
-        and not any(d.get("ran_at", "").startswith(prefix) for prefix in superseded)
-    ]
-
-
 def record_passed(r: dict) -> bool:
     """A case passed only if it ran, every run passed, nothing was skipped, and the run
     was not cut short."""
@@ -414,71 +236,3 @@ def render_markdown(records: list[dict]) -> str:
             f"{r['claude_version'] or ''} | {plugin} |"
         )
     return "\n".join(lines) + "\n"
-
-
-def main(argv: list[str]) -> int:
-    ap = argparse.ArgumentParser(description="convert eval results into d6-record lines")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--plugin-eval", help="an aggregate-result.json from claude plugin eval")
-    src.add_argument("--next-auto", help="a *-summary.json from evals/next-auto")
-    src.add_argument(
-        "--correct",
-        nargs=2,
-        metavar=("SUPERSEDES", "SUPERSEDED_BY"),
-        help="append a correction line: the stale batch's ran_at prefix, then its replacement",
-    )
-    src.add_argument(
-        "--effective", action="store_true", help="print the count and cost of records that stand"
-    )
-    ap.add_argument("--reason", default="", help="why the batch is superseded (with --correct)")
-    ap.add_argument("--target", help="plugin name@marketplace or path (plugin-eval only)")
-    ap.add_argument("--tags", default="", help="comma-separated tags applied to every case")
-    ap.add_argument("--model")
-    ap.add_argument("--judge-model")
-    ap.add_argument("--ablation", default="none")
-    ap.add_argument("--ledger", help="append records here (default evals/ledger.jsonl)")
-    ap.add_argument("--markdown", action="store_true", help="print the records as a table")
-    ap.add_argument("--no-ledger", action="store_true", help="convert only; append nothing")
-    args = ap.parse_args(argv)
-    ledger_path = Path(args.ledger) if args.ledger else DEFAULT_LEDGER
-    if args.correct:
-        if not args.reason:
-            ap.error("--reason is required with --correct")
-        append_correction(
-            ledger_path,
-            supersedes=args.correct[0],
-            superseded_by=args.correct[1],
-            reason=args.reason,
-        )
-        return 0
-    if args.effective:
-        recs = effective_records(ledger_path)
-        total = sum(Decimal(r["cost_usd"]) for r in recs if r.get("cost_usd") is not None)
-        print(f"{len(recs)} records stand; cost USD {total}")
-        return 0
-    try:
-        if args.plugin_eval:
-            if not args.target:
-                ap.error("--target is required with --plugin-eval")
-            records = from_plugin_eval(
-                Path(args.plugin_eval),
-                args.target,
-                [t for t in args.tags.split(",") if t],
-                model=args.model,
-                judge_model=args.judge_model,
-                ablation=args.ablation,
-            )
-        else:
-            records = from_next_auto(Path(args.next_auto))
-    except (RecordError, OSError, json.JSONDecodeError) as exc:
-        print(f"record: {exc}", file=sys.stderr)
-        return 2
-    if not args.no_ledger:
-        append(ledger_path, records)
-    if args.markdown:
-        sys.stdout.write(render_markdown(records))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
