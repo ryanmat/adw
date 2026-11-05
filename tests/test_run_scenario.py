@@ -1069,6 +1069,21 @@ def test_run_branch_plan_carries_the_blocked_status_and_the_decision(
     assert needle in detail
 
 
+def test_the_two_decisions_graders_share_one_condition(tmp_path, monkeypatch):
+    """decisions_recorded and run_branch_plan_carries read the Decisions section through one
+    helper, graders._decisions_present (3.5.10 spec R9): with it patched to say the section is
+    empty, both fail over HAND_BACK_PLAN with their existing detail strings."""
+    import graders
+
+    monkeypatch.setattr(graders, "_decisions_present", lambda plan_text: (False, ""))
+    ok, detail = graders.decisions_recorded(_state(HAND_BACK_PLAN), {})
+    assert (ok, detail) == (False, "decisions=''")
+    _clone, _branch, st = _clone_with_local_run_branch(tmp_path, HAND_BACK_PLAN)
+    ok, detail = graders.run_branch_plan_carries(st, {"step": 1, "state": "BLOCKED"})
+    assert not ok
+    assert detail.endswith("step 1: want BLOCKED, got BLOCKED; Decisions empty")
+
+
 def test_run_branch_plan_carries_raises_without_a_local_run_branch(tmp_path):
     import graders
 

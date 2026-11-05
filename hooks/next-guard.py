@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import sys
 
-if sys.version_info < (3, 12):  # noqa: UP036  (the guard runs below the floor by design)
+if sys.version_info < (3, 9):  # noqa: UP036  (the guard runs below the floor by design)
     sys.stderr.write(
         f"adw: python3 is {sys.version_info[0]}.{sys.version_info[1]}; "
-        "the plugin needs 3.12 or later on PATH\n"
+        "the guard hook needs 3.9 or later on PATH\n"
     )
     sys.exit(0)
 
@@ -637,8 +637,11 @@ def evaluate(payload: dict) -> tuple[str, str]:
     # ---- marker present: git clean reaching the run dir ----
     # .next-auto/ is excluded, not tracked, so -x and -X reach it and remove the marker.
     # An operand resolving into the run dir does the same with -fd. `git clean -fd`
-    # inside the worktree is the shape `revert` uses and stays allowed.
-    for seg, base in zip(segments, _effective_dirs(segments, payload.get("cwd")), strict=True):
+    # inside the worktree is the shape `revert` uses and stays allowed. `_effective_dirs`
+    # returns one entry per segment, so the pairing needs no `strict`, a 3.10 keyword this
+    # hook cannot use: its body runs from 3.9.
+    bases = _effective_dirs(segments, payload.get("cwd"))
+    for seg, base in zip(segments, bases):  # noqa: B905
         if _git_subcommand(seg) != "clean":
             continue
         args = seg[_git_subcommand_index(seg) + 1 :]
@@ -653,7 +656,7 @@ def evaluate(payload: dict) -> tuple[str, str]:
             return deny("git clean into the run directory during a run")
 
     # ---- marker present: recursive rm touching the run dir ----
-    for seg, base in zip(segments, _effective_dirs(segments, payload.get("cwd")), strict=True):
+    for seg, base in zip(segments, bases):  # noqa: B905
         args = _args(seg)
         if _program(seg) != "rm" or not _is_recursive(args):
             continue

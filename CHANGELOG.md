@@ -1,5 +1,22 @@
 # Changelog
 
+Each entry describes one release of the plugin; a release entry lists what it removes under a bullet that begins "Removed:", one item per surface.
+
+## 3.5.10 (2026-11-05)
+
+Curated from the maintainer's development repository after the engine merge da4a370, plus this release's version and documentation edits.
+
+The hardening items the 3.5.9 release left in its plan's Findings:
+
+- `renumber` reads a plural list as comma entries closed by one `and` or `to` entry, so a count after the list (`Steps 7 to 9, 12 tests red`) is no longer a step number; it rewrites references in the plan's preamble too, counted under a `preamble` key.
+- `boundary-commit` skips a plan kept out of git by design with an exit-0 line instead of refusing with a false reason, and reads a corrupt run marker as the error it is.
+- `next-guard` keeps its denials from Python 3.9 and its body runs there; the three import-bound hooks and the four scripts still stand down below 3.12 with one line.
+- `set N done` on a step already done appends a fix round after the step's record (`; fix round: <note>; <clause>`) instead of replacing it; a corrected note against the same record replaces that round's note, and the plan's own note passed back changes nothing.
+- The eval graders share one Decisions condition, and the projection's `--text` test reads a token per query shape from the answer itself.
+- Removed: the unread leftovers of `evals/lib/record.py` in the public cut (the shebang, `SUPPORTED_AGGREGATE_SCHEMA`, `DEFAULT_LEDGER`, the plugin-eval divider, `CORRECTION_SCHEMA`).
+
+Documentation: the README leads with the intent (the four phases intent, spec, plan, run; the intent file and its commit first in Usage), and this changelog marks removals under a `Removed:` bullet, one item per surface, starting with the 3.5.9 entry.
+
 ## 3.5.9 (2026-11-05)
 
 Curated from the maintainer's development repository after the engine merge de46e60, plus this release's version and documentation edits.
@@ -7,10 +24,10 @@ Curated from the maintainer's development repository after the engine merge de46
 The install sweep's engine fixes:
 
 - `merge` requires a `refs/notes/preflight` note on the head only under `ADW_PREFLIGHT_NOTE=required`; unset, the gate reads no notes (the README's Configuration table has the row).
-- `start` checks the owner allow-list before it reaches GitHub, as preflight and merge do; the unused open-pull-request probe is gone.
+- `start` checks the owner allow-list before it reaches GitHub, as preflight and merge do.
 - `boundary-commit` commits the plan alone (with the delivery record when the plan carries one) at a chunk boundary and refuses anything else staged.
 - Every hook and script prints one line and stands down below Python 3.12 instead of raising.
-- The classifier probe and the projection's two ledger sources are gone; the public tree is cut with the plugin-eval functions stripped by name.
+- Removed: the classifier probe (`evals/next-auto/probe_classifier.py`, its fixture, test and result files); the projection's two ledger sources (the close-out and factory parsers of `next_projection.py`); the plugin-eval functions of `evals/lib/record.py`, stripped by name in the public cut; `start`'s unused open-pull-request probe.
 - Wrap-up writes the `Intent:` trailer from the plan header, third of the four trailer lines.
 
 Carried from unattended use of the plugin under a scheduler:

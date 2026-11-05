@@ -2006,7 +2006,14 @@ def test_renumber_text_relabels_the_pending_steps_and_every_reference():
 def test_renumber_text_returns_the_map_and_the_per_section_counts():
     out, mapping, counts = next_plan.renumber_text(RENUMBER_PLAN, start=7, by=1)
     assert mapping == {7: 8, 8: 9, 12: 13}
-    assert counts == {"headers": 3, "status": 1, "bodies": 5, "decisions": 2, "findings": 1}
+    assert counts == {
+        "preamble": 0,
+        "headers": 3,
+        "status": 1,
+        "bodies": 5,
+        "decisions": 2,
+        "findings": 1,
+    }
     assert next_plan.unmapped_step_references(out, mapping) == [5, 6, 70]
 
 
@@ -2068,9 +2075,108 @@ def test_renumber_text_rewrites_plural_step_references_number_by_number():
     assert next_plan.unmapped_step_references("Steps 70 and 71", {}) == [70, 71]
 
 
+# ---- the plural list grammar stops at its closing word (3.5.10 spec R1, Step 1) ----------------
+
+HAZARD_PLAN = RENUMBER_PLAN.replace(
+    "Render the report from Step 7 and Step 8; Step 5 is untouched.",
+    "Render the report from Steps 7 to 8, 12 tests red; Step 5 is untouched.",
+).replace(
+    "- Minor: Step 12 and Step 70 share a word; Step 5 is done.",
+    "- Minor: Steps 7 and 8, 251 lines; Step 5 is done.",
+)
+
+
+@pytest.mark.parametrize(
+    "line, numbers",
+    [
+        ("Steps 7, 8 and 9", [7, 8, 9]),
+        ("Steps 7 and 8", [7, 8]),
+        ("Steps 7 to 9", [7, 9]),
+        ("Steps 7 to 9 and 12 tests", [7, 9]),
+        ("Steps 7, 8", [7]),
+        ("Steps 7 to 9, 12 tests red", [7, 9]),
+        ("Steps 7 and 8, 251 lines", [7, 8]),
+    ],
+)
+def test_step_ref_spans_read_a_plural_list_up_to_its_one_closing_word(line, numbers):
+    """3.5.10 spec R1: after `Steps <n>` a list is comma entries closed by one `and` or `to`;
+    the closing entry ends it, and a comma run with no closing word is a count, not a list (the
+    two hazard strings came from the 3.5.9 plan's own Status notes, Chunk I review)."""
+    assert [n for _s, _e, n in next_plan._step_ref_spans(line)] == numbers
+
+
+def test_renumber_text_leaves_a_count_after_a_plural_list_alone():
+    out, mapping, _counts = next_plan.renumber_text(HAZARD_PLAN, start=7, by=1)
+    assert "Render the report from Steps 8 to 9, 12 tests red; Step 5 is untouched." in out
+    assert "- Minor: Steps 8 and 9, 251 lines; Step 5 is done." in out
+    assert next_plan.unmapped_step_references(out, mapping) == [5, 6, 70]
+    assert next_plan.unmapped_step_references("Steps 7 and 8, 251 lines", {7: 8, 8: 9}) == []
+
+
+def test_renumber_cli_left_alone_line_omits_the_counts_after_a_plural(tmp_path):
+    p = write(tmp_path, HAZARD_PLAN)
+    r = run_cli("renumber", str(p), "--from", "7", "--by", "1")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines()[-1] == "left alone: Step 5, Step 6, Step 70"
+
+
+# ---- a renumber rewrites the preamble too (3.5.10 spec R2, Step 2) ----------------------------
+
+PREAMBLE_PLAN = RENUMBER_PLAN.replace(
+    "Spec: spec.md. Owner: the owner. Written: 2026-09-11.\n",
+    "Spec: spec.md. Owner: the owner. Written: 2026-09-11.\n\n"
+    "Unit 1 is Steps 5 to 6 and Unit 2 is Steps 7 to 12; Step 8 is the judge; Step 99 is a myth.\n",
+).replace(
+    "- Run: uv run python -m widget\n",
+    "- Run: uv run python -m widget\n\nGround rules: Step 7 commits alone.\n",
+)
+
+
+def test_renumber_text_rewrites_the_preamble_and_conventions_and_counts_them_apart():
+    """3.5.10 spec R2: the rewrite loop used to start at the first step header, so a plan's
+    unit line ("Unit 2 is Steps 7 to 12") and its Conventions prose kept stale labels."""
+    out, mapping, counts = next_plan.renumber_text(PREAMBLE_PLAN, start=7, by=1)
+    assert (
+        "Unit 1 is Steps 5 to 6 and Unit 2 is Steps 8 to 13; Step 9 is the judge; "
+        "Step 99 is a myth.\n"
+    ) in out
+    assert "Ground rules: Step 8 commits alone.\n" in out
+    assert "Spec: spec.md. Owner: the owner. Written: 2026-09-11.\n" in out
+    assert "- Legacy step map: 3 -> 5, 4 -> 6\n" in out
+    assert counts["preamble"] == 4
+    assert {k: v for k, v in counts.items() if k != "preamble"} == {
+        "headers": 3,
+        "status": 1,
+        "bodies": 5,
+        "decisions": 2,
+        "findings": 1,
+    }
+    assert next_plan.unmapped_step_references(out, mapping) == [5, 6, 70, 99]
+
+
+def test_renumber_cli_reports_the_preamble_count_first(tmp_path):
+    p = write(tmp_path, PREAMBLE_PLAN)
+    r = run_cli("renumber", str(p), "--from", "7", "--by", "1")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == [
+        f"renumbered {p}: 7 -> 8, 8 -> 9, 12 -> 13",
+        "preamble: 4",
+        *SECTION_LINES[1:],
+        "left alone: Step 5, Step 6, Step 70, Step 99",
+    ]
+    assert "Unit 2 is Steps 8 to 13" in p.read_text()
+
+
 # ---- the renumber command (carries spec R15, Step 15 of the 3.5.9 engine plan) -----------------
 
-SECTION_LINES = ["headers: 3", "status: 1", "bodies: 5", "decisions: 2", "findings: 1"]
+SECTION_LINES = [
+    "preamble: 0",
+    "headers: 3",
+    "status: 1",
+    "bodies: 5",
+    "decisions: 2",
+    "findings: 1",
+]
 
 
 def test_renumber_cli_rewrites_the_file_and_reports_per_section(tmp_path):

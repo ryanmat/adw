@@ -281,7 +281,7 @@ def test_marketplace_lists_adw_at_the_repo_root():
     assert entry["version"] == plugin["version"]
 
 
-RELEASE_VERSION = "3.5.9"
+RELEASE_VERSION = "3.5.10"
 
 
 def test_manifests_read_the_release_version_and_agree():
@@ -1437,6 +1437,16 @@ def test_next_md_item_12_names_the_clause_and_the_three_refusal_forms():
         assert needle in item_12, needle
 
 
+def test_next_md_item_12_appends_the_fix_round_after_the_record():
+    """3.5.10 spec R11: item 12 says a fix round's note is appended after the step's record as
+    `; fix round: <note>`, and no longer says the first round's evidence stays in the commit
+    history alone."""
+    doc = (COMMANDS / "next.md").read_text()
+    item_12 = doc.split("12. **Mark it done**", 1)[1].split("13. **Commit on green.**", 1)[0]
+    assert "; fix round: <note>" in item_12
+    assert "stays in the commit history" not in item_12
+
+
 def test_next_md_item_12_names_the_focused_run_note_form():
     """the owner's ruling of 2026-10-11 on Chunk C Important 2: a focused run's count never uses
     the four count forms the scan judges; item 12 gives the form that does not."""
@@ -1753,3 +1763,17 @@ def test_next_md_describes_the_hand_back_without_a_pull_request():
     assert "`RUN STOPPED <reason> NO PR: no step committed`" in doc
     assert "`RUN STOPPED <reason> PR #n`" in doc
     assert "RECORD SKIPPED" not in doc
+
+
+# ---- boundary-commit's skip line for an untracked plan (3.5.10 spec R3, Step 3) -----------------
+
+
+def test_next_md_boundary_paragraph_names_the_skip_line_once():
+    """The paragraph after the `$AUTO boundary-commit` block says what an untracked plan gets:
+    the skip line, exit 0, the Findings staying in the root plan."""
+    doc = (ROOT / "commands" / "next.md").read_text(encoding="utf-8")
+    after = doc.split("python3 $AUTO boundary-commit\n```\n", 1)[1]
+    paragraph = after.strip().split("\n\n", 1)[0]
+    assert paragraph.count("COMMIT SKIPPED boundary") == 1
+    assert "untracked" in paragraph and "exit 0" in paragraph
+    assert doc.count("COMMIT SKIPPED boundary") == 1
