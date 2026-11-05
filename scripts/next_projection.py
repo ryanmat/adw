@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 12):  # noqa: UP036  (the guard runs below the floor by design)
+    sys.stderr.write(
+        f"adw: python3 is {sys.version_info[0]}.{sys.version_info[1]}; "
+        "the plugin needs 3.12 or later on PATH\n"
+    )
+    sys.exit(2)
+
 import argparse
 import hashlib
 import json
@@ -20,7 +29,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import next_auto
 import next_plan
 import rulings
 
@@ -72,12 +80,6 @@ DECISION_RULING = re.compile(
 )
 # the store line's fields a ruling node keeps (Requirement 6 names them)
 RULING_KEYS = ("id", "time", "header", "option", "notes", "source")
-# Requirement 10 (f) and (g): the close-out ledger's JSON lines (closeout_ledger.jsonl_line) and
-# the night runner's ledger, one line per headless run; cost_usd is a Decimal string in both, as
-# format(Decimal, "f") writes it, and is kept as written
-CLOSEOUT_KEYS = ("session_id", "day", "model", "cost_usd")
-FACTORY_KEYS = ("ts", "session_id", "cost_usd")
-DECIMAL_STRING = re.compile(r"-?\d+(?:\.\d+)?")
 # Requirement 13's ruling unblocks <node> (rul-68231e8df9): the tokens of a ruling's text, the words
 # a capability slug is matched against, and the fields each ruling source wrote that text into
 RULING_TOKEN = re.compile(r"\b(?:F-\d+|DOC-\d+|R\d+|D\d+|S\d+|Step \d+)\b")
@@ -94,10 +96,9 @@ FIND_PROPS = ("title", "header", "option", "notes", "what")
 MAX_HOPS = 4
 MAX_PATH = 8
 # a node's dated props for query timeline: the UTC time a parser stores as at, gh's createdAt and
-# mergedAt, and a close-out cost's UTC day; at keeps the form its source wrote, a ruling's time or
-# a night ledger's ts, as its original
-DATED_PROPS = ("at", "createdAt", "mergedAt", "day")
-ORIGINAL_PROPS = ("time", "ts")
+# mergedAt; at keeps the form its source wrote, a ruling's time, as its original
+DATED_PROPS = ("at", "createdAt", "mergedAt")
+ORIGINAL_PROPS = ("time",)
 # Requirement 16's query landed, in the shape of a workspace's landed table
 # (read 2026-10-24): the deploy workflow's runs it reads (rul-982e177974), read only from a target
 # that carries that workflow; the Handoff's Since and Until lines (rul-0723e3dbdc); the Now table
@@ -711,105 +712,6 @@ def ingest_rulings(conn: sqlite3.Connection, project: Path, ingested_at: str) ->
         )
 
 
-def read_ledgers(
-    conn: sqlite3.Connection, source: str, paths: tuple[Path, ...], previous: Path
-) -> list[tuple[Path, str]] | None:
-    """The text of each ledger path of a source, or None when one cannot be read, a path that
-    does not exist among them: the exception is logged and the source left stale at the previous
-    store's watermark, and the build goes on (the spec's Error handling)."""
-    texts = []
-    for path in paths:
-        try:
-            texts.append((path, path.read_text(encoding="utf-8")))
-        except OSError:
-            log.error(
-                "next_projection: %s ledger unreadable, kept stale: %s", source, path, exc_info=True
-            )
-            keep_stale(conn, source, previous)
-            return None
-    return texts
-
-
-def ledger_rows(path: Path, text: str, keys: tuple[str, ...]) -> list[tuple[str, dict]]:
-    """Each line of a ledger as (where, row); a line that is not a JSON object with the keys, a
-    cost_usd that is not a Decimal string, or a run key not in next_auto.RUN_KEY_FORM stops the
-    build naming the path and line."""
-    rows = []
-    for n, line in enumerate(text.splitlines(), start=1):
-        if not line.strip():
-            continue
-        where = f"{path}:{n}: {line}"
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            log.error("next_projection: %s:%d: not a ledger line", path, n, exc_info=True)
-            raise ProjectionError(where) from None
-        if not isinstance(row, dict) or any(k not in row for k in keys):
-            raise ProjectionError(where)
-        cost = row["cost_usd"]
-        run = row.get("parent_session_id") or row["session_id"]
-        if not isinstance(cost, str) or not DECIMAL_STRING.fullmatch(cost):
-            raise ProjectionError(where)
-        if not isinstance(run, str) or not next_auto.RUN_KEY_FORM.fullmatch(run):
-            raise ProjectionError(where)
-        rows.append((where, row))
-    return rows
-
-
-def ingest_closeout(
-    conn: sqlite3.Connection, paths: tuple[Path, ...], ingested_at: str, previous: Path
-) -> None:
-    """The close-out ledger's JSON lines (source (f) of Requirement 10): a cost per line keyed
-    <session>/<day>/<model>, one per session, UTC day and model as closeout_ledger.rows_from writes
-    them, spent in the run of its session, a subagent run's in its parent session's. The watermark
-    is the newest modification time among the files, a line carrying a day and no time."""
-    texts = read_ledgers(conn, "closeout", paths, previous) if paths else None
-    if texts is None:
-        return
-    newest: str | None = None
-    for path, text in texts:
-        at = datetime.fromtimestamp(path.stat().st_mtime, UTC).strftime(TIME_FORM)
-        newest = at if newest is None else max(newest, at)
-        origin = Origin("closeout", file_version(path), ingested_at)
-        for _, row in ledger_rows(path, text, CLOSEOUT_KEYS):
-            key = f"{row['session_id']}/{row['day']}/{row['model']}"
-            cost = put_node(conn, origin, "cost", key, row)
-            run = put_node(conn, origin, "run", row.get("parent_session_id") or row["session_id"])
-            put_edge(conn, origin, cost, run, "spentIn", at)
-    if newest is not None:
-        conn.execute(
-            "INSERT INTO watermarks (source, watermark) VALUES (?, ?)", ("closeout", newest)
-        )
-
-
-def ingest_factory(
-    conn: sqlite3.Connection, paths: tuple[Path, ...], ingested_at: str, previous: Path
-) -> None:
-    """The night runner's ledger (source (g) of Requirement 10): a cost per line keyed by its
-    session id, its ts in UTC as at, spent in the run of that session id; the factory ledger,
-    which carries no session id, is not read (D11). The watermark is the newest ts in UTC."""
-    texts = read_ledgers(conn, "factory", paths, previous) if paths else None
-    if texts is None:
-        return
-    newest: str | None = None
-    for path, text in texts:
-        origin = Origin("factory", file_version(path), ingested_at)
-        for where, row in ledger_rows(path, text, FACTORY_KEYS):
-            try:
-                at = datetime.fromisoformat(row["ts"]).astimezone(UTC).strftime(TIME_FORM)
-            except (TypeError, ValueError):
-                log.error("next_projection: %s: unreadable ts", where, exc_info=True)
-                raise ProjectionError(where) from None
-            cost = put_node(conn, origin, "cost", row["session_id"], row | {"at": at})
-            run = put_node(conn, origin, "run", row["session_id"])
-            put_edge(conn, origin, cost, run, "spentIn", at)
-            newest = at if newest is None else max(newest, at)
-    if newest is not None:
-        conn.execute(
-            "INSERT INTO watermarks (source, watermark) VALUES (?, ?)", ("factory", newest)
-        )
-
-
 def stored_requirements(conn: sqlite3.Connection, closes: str) -> list[str]:
     """The requirement ids in the store for a declared closes target, requirement:<slug>/R<n>:
     the requirement of that slug and number in the spec version the checkout holds."""
@@ -1009,13 +911,10 @@ def ingest(
     project: Path,
     plan_globs: tuple[str, ...],
     gh: Callable[[list[str], Path], str],
-    closeout: tuple[Path, ...],
-    factory: tuple[Path, ...],
 ) -> None:
     """Every source into the store: the target checkout's, which must be a git work tree since
-    every tracked source is versioned by its commit sha, its repository's pull requests, the
-    plans and rulings under the project dir, and the ledgers given; then the derived edges that
-    join them."""
+    every tracked source is versioned by its commit sha, its repository's pull requests, and the
+    plans and rulings under the project dir; then the derived edges that join them."""
     root = Path(git(target, "rev-parse", "--show-toplevel"))
     ingested_at = datetime.now(UTC).strftime(TIME_FORM)
     previous = project / STORE
@@ -1026,8 +925,6 @@ def ingest(
     ingest_plans(conn, project, plan_globs, ingested_at)
     ingest_decisions(conn, project, ingested_at)
     ingest_rulings(conn, project, ingested_at)
-    ingest_closeout(conn, closeout, ingested_at, previous)
-    ingest_factory(conn, factory, ingested_at, previous)
     derive_closes(conn, ingested_at)
     derive_deploy_ranges(conn, root, ingested_at)
     derive_implemented_by(conn, ingested_at)
@@ -1041,8 +938,6 @@ def build(
     project: Path,
     plan_globs: tuple[str, ...] = PLAN_GLOBS,
     gh: Callable[[list[str], Path], str] = run_gh,
-    closeout: tuple[Path, ...] = (),
-    factory: tuple[Path, ...] = (),
 ) -> Path:
     """Write the store to projection.sqlite.tmp and rename it over projection.sqlite once every
     source parsed (Requirement 9); a build that fails leaves the previous store and no tmp file."""
@@ -1054,7 +949,7 @@ def build(
         conn = sqlite3.connect(tmp)
         try:
             conn.executescript(SCHEMA)
-            ingest(conn, target, project, plan_globs, gh, closeout, factory)
+            ingest(conn, target, project, plan_globs, gh)
             conn.commit()
         finally:
             conn.close()
@@ -1624,20 +1519,6 @@ def main(argv: list[str] | None = None) -> int:
         help="a plan glob relative to the project dir, repeatable; defaults to "
         + ", ".join(PLAN_GLOBS),
     )
-    b.add_argument(
-        "--closeout-jsonl",
-        action="append",
-        type=Path,
-        default=[],
-        help="a close-out ledger's JSON lines (closeout_ledger.py --jsonl), repeatable",
-    )
-    b.add_argument(
-        "--factory-ledger",
-        action="append",
-        type=Path,
-        default=[],
-        help="the night runner's ledger.jsonl, repeatable",
-    )
     s = sub.add_parser("status", help="print each source's watermark")
     # Requirement 15: typed tools only; no subcommand takes SQL
     q = sub.add_parser("query", help="answer a typed question from the store, as JSON")
@@ -1717,8 +1598,6 @@ def main(argv: list[str] | None = None) -> int:
             args.target,
             project,
             tuple(args.plans or PLAN_GLOBS),
-            closeout=tuple(args.closeout_jsonl),
-            factory=tuple(args.factory_ledger),
         )
     except (OSError, sqlite3.Error, subprocess.CalledProcessError, ProjectionError) as exc:
         detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else exc

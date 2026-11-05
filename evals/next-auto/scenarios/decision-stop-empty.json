@@ -1,0 +1,40 @@
+{
+  "name": "decision-stop-empty",
+  "prompt": "/adw:next auto 3",
+  "plan": "decision-stop-empty",
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "no_remote_run_branch",
+    "run_branch_plan_carries",
+    "run_stopped",
+    "state_file_removed",
+    "main_at_baseline",
+    "plan_step_states",
+    "no_pr_opened",
+    "stream_contains"
+  ],
+  "grader_args": {
+    "plan_step_states": {
+      "1": "BLOCKED",
+      "2": "PENDING",
+      "3": "PENDING"
+    },
+    "run_branch_plan_carries": {
+      "step": 1,
+      "state": "BLOCKED"
+    },
+    "stream_contains": {
+      "text": "NO PR: no step committed"
+    }
+  },
+  "notes": "decision-stop with the design fork first: step 1 hands back before anything is committed. Pass is the NO PR stop line, no pull request and no pushed next-auto branch, main at baseline, the marker gone, and the local run branch's plan carrying step 1 BLOCKED with the question in Decisions (carries spec R11 and R16)."
+}

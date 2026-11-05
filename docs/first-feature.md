@@ -4,14 +4,14 @@ This page takes one feature from an idea to a pull request with the adw plugin, 
 
 adw takes one piece of work from an idea to a pull request in three commands, and every phase leaves a file in your repository. `/adw:spec` writes `spec.md`. `/adw:plan-tdd` writes `prompt_plan.md`. `/adw:next` writes commits, one per step of the plan. A person signs at each boundary: you commit the spec, you commit the plan, and you read a report at the end of each chunk of steps before the next chunk starts. The plugin enforces the rest in code. A hook holds the turn open until the tests pass, and a check between the agent and every commit proves that the step's new tests fail on the commit the step started from, so the test counts in a step's done note are the ones the check measured and not ones the model wrote.
 
-This page walks that path once on a real repository and shows the files it produced, trimmed where they ran long. The repository was a Python package with one empty module and one smoke test. The feature was three string helpers. Everything below was typed into Claude Code with the plugin installed, and nothing was written by hand except three commit commands (the spec, the plan, and one review finding), one corrected line in the spec, and the pull request body at the end.
+This page walks that path once on a real repository and shows the files it produced, trimmed where they ran long and rendered in plain ASCII text, so bold, backticks, dashes and arrows inside quoted output are flattened and nothing else in a quote is changed. The repository was a Python package with one empty module and one smoke test. The feature was three string helpers. Everything below was typed into Claude Code with the plugin installed, and nothing was written by hand except three commit commands (the spec, the plan, and one review finding), one corrected line in the spec, and the pull request body at the end.
 
 ## Before you begin
 
 Install the plugin at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.8
+claude plugin marketplace add ryanmat/adw@v3.5.9
 claude plugin install adw@adw --scope user
 ```
 
@@ -209,7 +209,6 @@ FAILED tests/test_strings.py::test_slugify_table[C++ & Rust-c-rust] - Asserti...
 FAILED tests/test_strings.py::test_slugify_table[2024_Q3_report-2024-q3-report]
 FAILED tests/test_strings.py::test_slugify_collapses_separator_runs - Asserti...
 FAILED tests/test_strings.py::test_slugify_strips_edge_hyphens - AssertionErr...
-(...)
 9 failed, 5 passed in 0.02s
 ```
 
@@ -278,7 +277,7 @@ Step 2 - slugify input validation (d4657ac)
 ## Reviewer
 
 Step quality: Approved, no Critical, Important, or Minor findings. Verdict recorded at
-verdict-d4657acc(...).json, round 1.
+verdict-d4657acc52c6bc42012b515fdbe5b4962eb2e001.json, round 1.
 
 (...)
 
@@ -291,7 +290,7 @@ and the Findings section is still empty.
 
 Chunk A took 345 seconds. This is the third boundary, and the one you will see most often. Read the report, and if a number looks wrong, the files are there to check: the commits, `.next-auto/attended/result-1.json`, the review package and the reviewer's report. To go on, type `/adw:next` again (or tell the session to continue). The next batch line names Steps 3 to 4 and Chunk B.
 
-Chunk B (truncate, steps 3 and 4) ran the same way in 363 seconds and ended Approved with one Minor finding: a parametrized test took an `expected` value it never used. The loop appended the finding to the plan's Findings section, which is the designed place for it, and then told us that nothing in the scripts commits the plan on its own at a boundary, so the plan was left modified and the next run's clean-tree check would have stopped there. We committed the plan by hand (`docs(plan): record the Chunk B review finding`) and typed `/adw:next` again. Chunk C (word_count and the package export, steps 5 and 6) took 373 seconds, ended Approved with one Important finding that the reviewer itself classed as plan-mandated (the smoke test's assertion was rewritten, as the spec said it would be), and this time the loop committed the plan itself. Either way the finding is in the plan file, where the next reader finds it; the engine needs one rule for that commit, and that is queued for the next release.
+Chunk B (truncate, steps 3 and 4) ran the same way in 363 seconds and ended Approved with one Minor finding: a parametrized test took an `expected` value it never used. The loop appended the finding to the plan's Findings section, which is the designed place for it, and then told us that nothing in the scripts commits the plan on its own at a boundary, so the plan was left modified and the next run's clean-tree check would have stopped there. We committed the plan by hand (`docs(plan): record the Chunk B review finding`) and typed `/adw:next` again. Chunk C (word_count and the package export, steps 5 and 6) took 373 seconds, ended Approved with one Important finding that the reviewer itself classed as plan-mandated (the smoke test's assertion was rewritten, as the spec said it would be), and this time the loop committed the plan itself. Either way the finding is in the plan file, where the next reader finds it; from 3.5.9 the loop makes that commit itself with `boundary-commit`, which commits the plan alone and refuses any other change in the tree.
 
 At the end of Chunk C every step was DONE, the tree was clean, and the suite stood at 48 tests. The three runs of the loop cost $2.45, $2.66 and $2.90 on Opus; with the spec ($0.63) and the plan ($0.53) the whole feature came to $9.17 and about 21 minutes of agent time, with a person reading at the five boundaries.
 
@@ -335,7 +334,7 @@ Closes: slugify, truncate, word_count contracts (the spec carries no requirement
 Approved-by: @ryanmat
 ```
 
-The trailers are the part the tools read: `scripts/next_projection.py` builds a view of pull requests, specs and the requirement ids they close from these trailer lines, and an unattended run writes three of them itself at wrap-up. A spec with numbered requirements (`R1`, `R2`) gives the `Closes:` line ids to carry; this one had none, which is why that line is prose.
+The trailers are the part the tools read: `scripts/next_projection.py` builds a view of pull requests, specs and the requirement ids they close from these trailer lines, and an unattended run writes four of the lines itself at wrap-up: these three and `Intent:` when the plan header carries one. A spec with numbered requirements (`R1`, `R2`) gives the `Closes:` line ids to carry; this one had none, which is why that line is prose.
 
 Merge it the way you merge any pull request; nothing in attended mode merges for you.
 
@@ -354,4 +353,4 @@ You have a `spec.md` and a `prompt_plan.md` committed in the repository, six com
 
 ## Next steps
 
-The command files are the behavior. `commands/spec.md`, `commands/plan-tdd.md` and `commands/next.md` are what the model reads when you type the commands, and when the loop does something this page did not prepare you for, the answer is in `commands/next.md`. The methodology behind the shape is `ai-dev-workflow.md`, and the moves without the reasoning are `workflow-runbook.md`. The unattended mode, which ends at a pull request a run cannot merge, is the `Optional: Run the loop unattended` task of the runbook together with the allow rules it needs. The README's Intents and traceability section covers the `Intent:` trailer and the `query intent` report that lists what has landed against an intent.
+The command files are the behavior. `commands/spec.md`, `commands/plan-tdd.md` and `commands/next.md` are what the model reads when you type the commands, and when the loop does something this page did not prepare you for, the answer is in `commands/next.md`. The methodology behind the shape is `ai-dev-workflow.md`, and the moves without the reasoning are `workflow-runbook.md`. The unattended mode, which ends at a pull request a run cannot merge, is the `Optional: Run the loop unattended` task of the runbook together with the allow rules it needs. The intent above a spec, the `Intent:` trailer and the `query intent` report that lists what has landed against an intent are [Intents and traceability in adw](intent.md).

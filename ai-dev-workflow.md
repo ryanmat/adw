@@ -2,8 +2,8 @@
 
 Claude Code owns spec through ship in the terminal, with deterministic gates (tests, lint, pre-commit) holding the line for code and graded evals holding it for model behavior.
 
-Version: 3.5.8
-Last revised: 2026-11-03
+Version: 3.5.9
+Last revised: 2026-11-05
 
 The IDE reviews and the browser verifies. This document is for the human. Do not load it into agent context as standing instructions. The only machine-facing pieces are the install blocks in the "Config placement" section.
 
@@ -38,6 +38,12 @@ The full pipeline earns its cost only above a size floor. Applied uniformly, it 
 Work whose artifacts are themselves deliverables defaults to System class regardless of size.
 
 ---
+
+## Phase 0: Intent (optional)
+
+Above the spec sits the intent: the outcome a piece of work serves, written before any spec and carried by one id. Most work skips this phase, and Script and Feature class work almost always does. A change that fits one spec needs no intent, the three commands never ask for one, and no gate or validator reads it; write one when the work spans more than one spec, or when a reader will ask what the work was for after the pull requests are merged and the specs have been superseded.
+
+The file is `docs/intents/<id>.md`, one page under 8 KB in seven sections (problem and outcome, who it serves, in and out of scope, acceptance scenarios, rules by reference, dependencies as boundaries, open questions), and it names no repository, model or size. Its id travels through the `Intent:` line of the spec and plan headers to the `Intent:` trailer on the pull request and the `## Intents` Now table of `docs/setup-plan.md`, where the projection reads it and `query intent` lists what has landed against the outcome. The shape, the carriers and the queries are in `docs/intent.md`; the moves are the runbook's optional task.
 
 ## Phase 1: Spec (Claude Code, `/adw:spec`)
 
@@ -84,7 +90,7 @@ Supporting practices during the loop:
 
 The interactive loop has a human at every chunk boundary and a deterministic `check` between each step and its commit. That is the right default, and it is also what keeps the loop from running while nobody is watching. `/adw:next auto` removes that trigger for work that is already decomposed, and pays for it with restrictions rather than trust.
 
-It is hold-only. A run branches from local default into a worktree, commits per step, and ends at a labeled pull request. It never merges, and nothing reaches the default branch without a human. A run targets only a repository whose GitHub owner is in `ADW_OWNERS` and that is not a fork, which keeps an unattended agent away from every repository you did not name.
+It is hold-only. A run branches from local default into a worktree, commits per step, and ends at a labeled pull request; a run that commits no step ends without one, handing the plan back with its stop recorded. It never merges, and nothing reaches the default branch without a human. A run targets only a repository whose GitHub owner is in `ADW_OWNERS` and that is not a fork, which keeps an unattended agent away from every repository you did not name.
 
 The enforcement is code, not instruction. A guard hook denies hook bypasses everywhere and, while a run is live, denies merges, force pushes, and the destructive git verbs. Between the implementer and the commit, a deterministic gate runs. It re-applies the step's new tests to the commit the step started from and requires them to fail there, so test-first is proven rather than claimed. The same gate refuses a staged secret, a toolchain file, or a change to the gate's own config the step never named, and compares collected, skipped, and xfailed counts against the baseline, so a step cannot reach green by shrinking the suite. Nor does the orchestrator fix review findings itself; a second failure on the same step stops the run.
 
@@ -133,7 +139,7 @@ One home per contract: each command's source of truth is a standalone file under
 Install at user scope, pinned to a release tag. The marketplace add carries the pin, because a plugin sourced from the marketplace's own root follows the marketplace's commit:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.8
+claude plugin marketplace add ryanmat/adw@v3.5.9
 claude plugin install adw@adw --scope user
 ```
 
@@ -223,7 +229,7 @@ The artifacts map one-to-one onto the stages a reviewer or a client wants to see
 
 | Stage | Artifact | What the reader sees |
 |---|---|---|
-| Inception | The intent each unit of work serves: the `Intent:` trailer on its pull request, and the `## Intents` Now table that maps live intents to their specs | Every change traces to a stated outcome, and `query intent` lists what has landed against it |
+| Inception | The intent each unit of work serves: the optional `docs/intents/<id>.md` file, the `Intent:` trailer on its pull request, and the `## Intents` Now table that maps live intents to their specs | Every change traces to a stated outcome, and `query intent` lists what has landed against it |
 | Discovery | spec.md (interview-derived, rejected alternatives recorded) | The problem was understood before code existed |
 | Architecture | prompt_plan.md, plus ADRs for load-bearing decisions | The build order and its reasoning are inspectable |
 | Implementation | Commit history keyed to plan steps, captured test output | Every change is scoped, gated, and evidenced |

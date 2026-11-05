@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.5.9 (2026-11-05)
+
+Curated from the maintainer's development repository after the engine merge de46e60, plus this release's version and documentation edits.
+
+The install sweep's engine fixes:
+
+- `merge` requires a `refs/notes/preflight` note on the head only under `ADW_PREFLIGHT_NOTE=required`; unset, the gate reads no notes (the README's Configuration table has the row).
+- `start` checks the owner allow-list before it reaches GitHub, as preflight and merge do; the unused open-pull-request probe is gone.
+- `boundary-commit` commits the plan alone (with the delivery record when the plan carries one) at a chunk boundary and refuses anything else staged.
+- Every hook and script prints one line and stands down below Python 3.12 instead of raising.
+- The classifier probe and the projection's two ledger sources are gone; the public tree is cut with the plugin-eval functions stripped by name.
+- Wrap-up writes the `Intent:` trailer from the plan header, third of the four trailer lines.
+
+Carried from unattended use of the plugin under a scheduler:
+
+- A run that commits no step hands back: no push, no pull request, `RUN STOPPED <reason> NO PR: no step committed`, the plan brought home and the local run branch kept for the morning read.
+- One `[run <id>]` tag per entry, and the appender puts a bullet on its own line after an unterminated last line.
+- `validate` warns, never refuses, when an open step names `pyproject`, `conftest`, `pre-commit-config` or `tox` without the file's basename; the `preflight` command prints each warning once as `PREFLIGHT WARN`.
+- `next_plan.py renumber <plan> --from <n> --by <k>` relabels the PENDING steps from `<n>` up and every `Step <n>` or `Steps <n>, <n> and <n>` reference, extends the `Legacy step map` line, and refuses a non-positive shift, a start above every step and a step in range that is not PENDING.
+- The ninth eval scenario, `decision-stop-empty`, grades the hand-back live.
+
+Documentation: `docs/intent.md` is new (the intent artifact, the `Intent:` header line in `/adw:spec` and `/adw:plan-tdd`, the trailer, a run's hand-back in the methodology), and the command text, README and runbook moved with each change above. The first-feature walkthrough and the README overview shipped in the 3.5.8 documentation releases.
+
 ## 3.5.8 (2026-11-02)
 
 First public release, curated from the maintainer's development repository at commit ab2b2d1.

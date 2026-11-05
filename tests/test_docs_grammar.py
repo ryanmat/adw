@@ -90,6 +90,7 @@ def test_next_md_references_real_subcommands():
         "pr-opened",
         "done-verdict",
         "plan-approved",
+        "boundary-commit",
     }
     # a subcommand may end an inline code span, so strip the closing backtick
     for m in re.finditer(r"\$PLAN (\S+)", doc):
@@ -280,7 +281,7 @@ def test_marketplace_lists_adw_at_the_repo_root():
     assert entry["version"] == plugin["version"]
 
 
-RELEASE_VERSION = "3.5.8"
+RELEASE_VERSION = "3.5.9"
 
 
 def test_manifests_read_the_release_version_and_agree():
@@ -326,7 +327,7 @@ def test_goal_line_names_plugin_command():
 
 def test_scenario_prompts_name_plugin_command():
     files = sorted(SCENARIOS.glob("*.json"))
-    assert len(files) == 8, [f.name for f in files]
+    assert len(files) == 9, [f.name for f in files]
     attended = {"attended-chunk-stop", "attended-check-blocks-gaming"}
     for f in files:
         prompt = json.loads(f.read_text())["prompt"]
@@ -1243,7 +1244,9 @@ def test_r11_next_md_names_the_test_files_key_and_its_platform_source():
 
 def test_r12_next_md_names_the_done_file_the_checked_tree_and_the_base_appender():
     """ai-dlc-record R11, R12: the done check's own file and its append, the commit refusal for
-    a changed tree, the base appender, the verdict chain, and the skipped pr.opened."""
+    a changed tree, the base appender, the verdict chain, and pr.opened on the PR head alone
+    (a run that committed no step opens no PR since the 3.5.9 engine, carries spec R11, so
+    nothing is skipped and the auto section names the NO PR line instead)."""
     sec = _attended_section()
     boundary = sec[sec.index("**At the chunk boundary.**") :]
     done = json.loads((FIXTURES / "record-evidence" / "done.json").read_text())
@@ -1264,7 +1267,9 @@ def test_r12_next_md_names_the_done_file_the_checked_tree_and_the_base_appender(
     assert "the tree changed since check N passed" in commit_item
     doc = (COMMANDS / "next.md").read_text()
     assert "as committed on origin's default branch" in doc
-    assert "RECORD SKIPPED" in _auto_section()
+    auto = _auto_section()
+    assert "RECORD SKIPPED" not in auto
+    assert "`RUN STOPPED <reason> NO PR: no step committed`" in auto
 
 
 def test_r12_next_md_says_how_a_rejected_done_check_is_superseded():
@@ -1488,7 +1493,7 @@ def test_plan_tdd_md_names_each_new_line_and_when_it_is_written(needle):
         "red_reason: comment-only fix round",
         "the step's `Guard-mutation:` line",
         "the Holdout's hash against the one step-begin recorded",
-        "`Spec:`, `Closes:` and `Approved-by:`",
+        "`Spec:`, `Closes:`, `Intent:` and `Approved-by:`",
         "`<appender> sync <slug>`",
         "reads no other work tree",
     ],
@@ -1665,3 +1670,86 @@ def test_r16_start_names_the_issue_in_the_branch_the_preflight_rule_reads():
         "on `next-auto/<issue>-<slug>-<run-id>`, the `<issue>-` there only when the plan carries "
         "`Issue`"
     ) in doc
+
+
+# ---- the optional Intent: header line (Intent docs spec R6) ----------------------------------
+
+
+def test_spec_md_names_the_optional_intent_header_line():
+    """/adw:spec writes `Intent: <id>` into the spec header only when the request names an
+    intent, and never asks for one: the line is optional in every mode."""
+    rules = _section((COMMANDS / "spec.md").read_text(), "## Shared rules")
+    assert "Intent: <id>" in rules
+    assert "docs/intents/" in rules
+    assert "never asks" in rules and "any mode" in rules
+
+
+def test_plan_tdd_grammar_carries_the_optional_intent_line():
+    """The plan header's optional `Intent: <id>` line follows the Spec: line, copied from the
+    spec's header exactly when it has one; the validator reads header lines as free text."""
+    doc = (COMMANDS / "plan-tdd.md").read_text()
+    block = first_markdown_block(doc, "## Conventions binding every step")
+    lines = block.splitlines()
+    spec_line = lines.index("Spec: spec.md. Owner: <name>. Written: <date>.")
+    assert lines[spec_line + 1] == "Intent: <id>"
+    after_block = doc[doc.index(block) + len(block) + len("```") :]
+    prose = after_block.split("**Conventions.**", 1)[0]
+    for phrase in ("optional", "exactly when", "header lines"):
+        assert phrase in prose, f"the sentence under the grammar block lacks {phrase!r}"
+    # the engine writes the trailer from 3.5.9 (sweep spec R6), and the command text says so
+    assert "an unattended run's wrap-up writes the pull request's `Intent:` trailer from it" in (
+        prose
+    ), "plan-tdd.md does not say wrap-up writes the Intent: trailer"
+
+
+# ---- the preflight note variable in the command text (sweep spec R1) ---------------------------
+
+
+def test_next_md_names_the_preflight_note_variable_once():
+    """The merge sentence says the note is required only under ADW_PREFLIGHT_NOTE=required."""
+    doc = (COMMANDS / "next.md").read_text()
+    assert doc.count("ADW_PREFLIGHT_NOTE") == 1
+    assert "ADW_PREFLIGHT_NOTE=required" in doc
+
+
+# ---- the gate-config warning in the command text (carries spec R13, its 3(c); Step 13) --------
+
+
+def test_both_command_files_name_the_gate_config_warning():
+    """plan-tdd.md names the warning where its step grammar names Size:, and next.md's
+    preflight paragraph names the PREFLIGHT WARN line that carries it to the operator."""
+    sentence = (
+        "names `pyproject`, `conftest`, `pre-commit-config` or `tox` without the file's basename"
+    )
+    plan_tdd = (COMMANDS / "plan-tdd.md").read_text()
+    assert "`validate` warns, never refuses, when a step " + sentence in plan_tdd
+    next_md = (COMMANDS / "next.md").read_text()
+    assert sentence in next_md
+    assert next_md.count("PREFLIGHT WARN") == 1
+
+
+# ---- the renumber command (carries spec R15, Step 15) ------------------------------------------
+
+
+def test_plan_tdd_names_the_renumber_command_and_the_parser_has_it(capsys):
+    """The step-numbering rule names the command that applies it, and next_plan.py's parser
+    knows the name, so the rule never points at a command that does not exist."""
+    doc = (COMMANDS / "plan-tdd.md").read_text()
+    rule = next(p for p in doc.split("\n\n") if "renumbers only the PENDING steps behind it" in p)
+    assert "`renumber`" in rule and "--from" in rule and "--by" in rule
+    with pytest.raises(SystemExit) as exc:
+        next_plan.main(["renumber", "--help"])
+    assert exc.value.code == 0
+    assert "--from" in capsys.readouterr().out
+
+
+# ---- the NO PR stop line in the command text (carries spec R11 and R16, Step 17) ---------------
+
+
+def test_next_md_describes_the_hand_back_without_a_pull_request():
+    """The README's sentence is pinned in tests/test_curate.py, which reads the public tree;
+    this module ships in the curated tree, where release/ is gone (Chunk G review)."""
+    doc = (COMMANDS / "next.md").read_text()
+    assert "`RUN STOPPED <reason> NO PR: no step committed`" in doc
+    assert "`RUN STOPPED <reason> PR #n`" in doc
+    assert "RECORD SKIPPED" not in doc

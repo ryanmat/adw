@@ -59,6 +59,15 @@ def test_run_stopped_two_line_shape():
     )
 
 
+def test_run_stopped_no_pr_line_shape():
+    """The hand-back's line (carries spec R11, Step 19 of the 3.5.9 engine plan): the public
+    README names it among the lines a scheduler reads, so its text and its print are pinned."""
+    assert next_auto.NO_PR_SUFFIX == "NO PR: no step committed"
+    assert _printed("RUN STOPPED {result['reason']} {NO_PR_SUFFIX}"), (
+        f"{FACTORY} reads RUN STOPPED <reason> NO PR: no step committed as the hand-back's line"
+    )
+
+
 def test_never_auto_and_secret_patterns_are_module_attributes():
     assert isinstance(next_auto.NEVER_AUTO, frozenset), (
         f"{FACTORY} imports NEVER_AUTO as the never-run set"

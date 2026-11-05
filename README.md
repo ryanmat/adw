@@ -6,7 +6,7 @@ The spec, plan, run pipeline for Claude Code: `/adw:spec` writes the spec, `/adw
 
 ## Overview
 
-adw is a Claude Code plugin and the methodology it implements. Three slash commands take one piece of work from an idea to a pull request, and every phase leaves a file in the repository: `/adw:spec` writes `spec.md`, `/adw:plan-tdd` writes `prompt_plan.md`, and `/adw:next` writes commits, one per step of the plan. A person signs at each boundary (the spec commit, the plan commit, and the report at the end of each chunk of steps), and the plugin enforces the rest in code. A guard hook denies hook bypasses. A Stop hook holds a turn open until the plan's tests pass. A check between the agent and every commit proves that the step's new tests fail on the commit the step started from, refuses staged secrets and toolchain files, and compares the suite's collected and skipped counts against the baseline, so a step cannot reach green by shrinking the suite.
+adw is a Claude Code plugin and the methodology it implements. Three slash commands take one piece of work from an idea to a pull request, and every phase leaves a file in the repository: `/adw:spec` writes `spec.md`, `/adw:plan-tdd` writes `prompt_plan.md`, and `/adw:next` writes commits, one per step of the plan. An optional phase before the spec, the intent, leaves `docs/intents/<id>.md` for work that spans more than one spec; see [Intents and traceability in adw](docs/intent.md). A person signs at each boundary (the spec commit, the plan commit, and the report at the end of each chunk of steps), and the plugin enforces the rest in code. A guard hook denies hook bypasses. A Stop hook holds a turn open until the plan's tests pass. A check between the agent and every commit proves that the step's new tests fail on the commit the step started from, refuses staged secrets and toolchain files, and compares the suite's collected and skipped counts against the baseline, so a step cannot reach green by shrinking the suite.
 
 Start with [Your first feature with adw](docs/first-feature.md), which walks the three commands once on a real repository and shows the files they produced. The methodology is `ai-dev-workflow.md`; the step-by-step procedure is `workflow-runbook.md`. The command files under `commands/` are the source of truth for what each command does: they are the text the model reads when you type the command, so when the loop does something these documents did not prepare you for, the answer is in `commands/next.md`.
 
@@ -14,10 +14,10 @@ Nothing in the plugin is standing agent context; every piece is loaded by the pl
 
 ## Setup
 
-Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
+Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first; a lower version prints one line and the hooks stand down), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.8
+claude plugin marketplace add ryanmat/adw@v3.5.9
 claude plugin install adw@adw --scope user
 ```
 
@@ -69,31 +69,21 @@ git add prompt_plan.md && git commit -m "docs: implementation plan for <feature>
 
 `/adw:next` writes the failing test first, implements to green, runs the deterministic `check`, commits with hooks passing, marks the step done, and stops at the chunk boundary (a chunk is an H2 group of at most five plan steps) with the evidence and the reviewer's verdict. Type `/adw:next` again for the next chunk. Attended work ends as commits on your branch; you push and open the pull request. [Your first feature with adw](docs/first-feature.md) shows each of these steps with the files it produced.
 
-For a plan that is already decomposed into mechanical steps, `/adw:next auto [N]` runs up to N steps unattended in a worktree and ends at a labeled pull request. It is hold-only: the run cannot merge, and a person reviews the pull request and merges it. The gated form, `python3 <installPath>/scripts/next_auto.py merge <n>`, re-runs Test and Lint at the head and requires a reviewer verdict record and a `refs/notes/preflight` note on it; this repository does not ship the pre-push check that writes that note, so until the note is optional the gated form refuses, and `gh pr merge` is the merge. See the runbook's unattended task.
+For a plan that is already decomposed into mechanical steps, `/adw:next auto [N]` runs up to N steps unattended in a worktree and ends at a labeled pull request, and a run that commits no step ends without a pull request: the plan comes back with its stop recorded and nothing is pushed. It is hold-only: the run cannot merge, and a person reviews the pull request and merges it. The gated form, `python3 <installPath>/scripts/next_auto.py merge <n>`, re-runs Test and Lint at the head and requires a reviewer verdict record on it; with `ADW_PREFLIGHT_NOTE=required` in your settings it also requires a `refs/notes/preflight` note, which a pre-push check of your own writes, and without that setting it reads no notes. See the runbook's unattended task.
+
+The plugin ships no scheduler. `/adw:next auto N` is one invocation, so a scheduler of your own (cron, a CI job, a runner on a machine you own) starts it as one `claude -p "/adw:next auto N"` under the CLI's `--max-budget-usd` cap and reads its stream. The lines a scheduler reads (`PREFLIGHT REFUSED`, `PREFLIGHT OK`, `RUN STARTED`, `RUN STOPPED <reason> PR #n`, `RUN STOPPED <reason> NO PR: no step committed`, `WRAP-UP FAILED`) are pinned by name in `tests/test_factory_parity.py`, so a release that changes one fails its own suite. Every run is hold-only, so a scheduler lands pull requests and never merges them.
 
 The methodology is `ai-dev-workflow.md`; the moves without the reasoning are `workflow-runbook.md`.
 
 ## Intents and traceability
 
-Above a spec sits an intent: the outcome a set of units of work serves, carried by an id such as `30.1`. The engine never writes one. It reads them, so that every pull request traces back to the intent it serves, through two conventions:
-
-- A pull request body carries the trailer lines `Spec: <slug>`, `Closes: <requirement ids>`, `Intent: <intent ids>` and `Approved-by: @<login>`. An unattended run writes the first, second and fourth at wrap-up, from the plan header, the DONE steps and the delivery record; the `Intent:` line is the author's. The projection reads the first line of each.
-- `docs/setup-plan.md` in the project carries a `## Intents` section whose `### Now` table has an `Intent` column and a `Specs` column, mapping each live intent to the specs that serve it. The landed report fills its Intent cell from that table when a pull request names a spec and no intent.
-
-`scripts/next_projection.py` builds a SQLite store from a checkout and answers typed questions from it; no query takes SQL. Outside a Claude Code session, pass `--project <dir>` to each command, since the default comes from `CLAUDE_PROJECT_DIR`:
-
-```bash
-python3 <installPath>/scripts/next_projection.py build --target <checkout>
-python3 <installPath>/scripts/next_projection.py query intent 30.1
-python3 <installPath>/scripts/next_projection.py query coverage <capability-slug>
-```
-
-`query intent` lists the intent's merged pull requests with their deploy and its open ones in base-chain order; `query coverage` lists a capability's requirements and the pull requests that close them. `query entity`, `find`, `neighbors`, `path` and `timeline` walk the same store.
+Above a spec sits an intent: the outcome a set of units of work serves, carried by an id such as `30.1`. The engine never writes one. The id travels through four places, the intent file at `docs/intents/<id>.md`, the `Intent:` line in the spec and plan headers, the `Intent:` trailer on a pull request body, and the `## Intents` Now table of `docs/setup-plan.md`, and the projection reads the last two, so that `query intent` lists what has landed against each outcome. The file's shape, each carrier and the queries are in [Intents and traceability in adw](docs/intent.md).
 
 ## Layout
 
 - `docs/first-feature.md` - the walkthrough: the three commands once on a real repository, with the spec, the plan, the loop's output, the reviewer verdict, the boundary report and the pull request body it produced.
-- `ai-dev-workflow.md` - the methodology: surfaces and their jobs, weight classes, the five phases including unattended execution, config placement.
+- `docs/intent.md` - the optional intent above a spec: the seven-section file, the path of its id through the spec and plan headers to the pull request trailer and the Now table, and the `query intent` report.
+- `ai-dev-workflow.md` - the methodology: surfaces and their jobs, weight classes, the phases from the optional intent through unattended execution and shipping, config placement.
 - `workflow-runbook.md` - the step-by-step operating procedure; the moves without the reasoning.
 - `.claude-plugin/` - `plugin.json` (name `adw`, version) and `marketplace.json` (one plugin, sourced from this root).
 - `commands/` - `spec.md` (`/adw:spec`: interview, quick, and v0 pre-discovery modes), `plan-tdd.md` (`/adw:plan-tdd`), and `next.md` (`/adw:next`, the chunk-paced attended loop and `/adw:next auto`).
@@ -115,6 +105,7 @@ Read from the environment, which for Claude Code means the `env` block of the us
 |---|---|---|
 | `ADW_OWNERS` | unset | Comma-separated GitHub owners whose repositories `/adw:next auto` may target. Unset, preflight, start and merge refuse. |
 | `ADW_NEVER_AUTO` | empty | Comma-separated `owner/repo` slugs that are never an unattended target, refused before any network call. |
+| `ADW_PREFLIGHT_NOTE` | unset | Set to `required` to make `merge` refuse a head without a `refs/notes/preflight` note; unset, the gate does not read notes. |
 | `ADW_DONE_REVIEWER` | `done-check` | The reviewer name a done-check verdict record carries; `done-verdict` writes it and `merge` accepts it in place of the chunk reviewer's `Approved`. |
 | `ADW_EVAL_FIXTURE_REPO` | unset | The `owner/repo` the eval harness resets and drives; its `baseline` tag holds `evals/next-auto/fixtures/baseline/`. Evals only. |
 

@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 12):  # noqa: UP036  (the guard runs below the floor by design)
+    sys.stderr.write(
+        f"adw: python3 is {sys.version_info[0]}.{sys.version_info[1]}; "
+        "the plugin needs 3.12 or later on PATH\n"
+    )
+    sys.exit(2)
+
 import argparse
 import contextlib
 import fnmatch
@@ -52,6 +61,12 @@ def owner_reason(owner: str | None, *, noun: str = "origin owner") -> str | None
     if owner not in OWNER:
         return f"{noun} is {owner!r}, not one of {', '.join(sorted(OWNER))}"
     return None
+# The merge gate requires the preflight plugin's refs/notes/preflight note on the head only
+# when this variable is exactly "required"; unset, the gate never reads notes (sweep spec R1).
+PREFLIGHT_NOTE_VAR = "ADW_PREFLIGHT_NOTE"
+# the suffix of the RUN STOPPED line when the run committed no step and so opened no pull
+# request (carries spec R11); the factory's stream regex leaves its PR group empty on it
+NO_PR_SUFFIX = "NO PR: no step committed"
 # Outside .claude/: Claude Code treats every path under .claude/ as a sensitive file and
 # denies tool writes there in non-interactive mode, which would leave the implementer
 # unable to write into the run worktree.
@@ -60,18 +75,8 @@ RUN_SUBDIR = ".next-auto"
 # the guard hook stays unarmed and auto preflight's no-run rule is unaffected
 ATTENDED_SUBDIR = "attended"
 MAX_BYTES = 1_048_576
-GATE_CONFIG_FILES = (
-    "conftest.py",
-    "pytest.ini",
-    "tox.ini",
-    "pyproject.toml",
-    "ruff.toml",
-    ".ruff.toml",
-    "setup.cfg",
-    ".pre-commit-config.yaml",
-    "CLAUDE.md",
-    "Makefile",
-)
+# the gate-config files, one source with the plan grammar's plan-time warning
+GATE_CONFIG_FILES = next_plan.GATE_CONFIG_FILES
 # the run cap, one source with the plan grammar's per-step cap (next_plan.RUN_SIZE_LIMIT)
 RUN_SIZE_LIMIT = next_plan.RUN_SIZE_LIMIT
 # steps one `/adw:next auto` invocation works by default: `start`'s --steps, and the batch
@@ -226,12 +231,6 @@ def list_next_auto_prs(root: Path) -> tuple[list[tuple[int, str]] | None, str]:
         return [(int(item["number"]), str(item["headRefName"])) for item in rows], ""
     except (json.JSONDecodeError, TypeError, KeyError, ValueError):
         return None, "gh pr list returned no JSON"
-
-
-def has_open_next_auto_pr(root: Path) -> bool | None:
-    """True or False from GitHub, None when gh failed or its output did not parse."""
-    prs, _cause = list_next_auto_prs(root)
-    return None if prs is None else bool(prs)
 
 
 def parse_origin_owner(url: str) -> str | None:
@@ -944,18 +943,22 @@ def record_done_verdict(
 # ---- preflight --------------------------------------------------------------
 
 
-def check_plan(root: Path, plan_path: Path) -> list[str]:
+def check_plan(root: Path, plan_path: Path) -> tuple[list[str], list[str]]:
     """The plan checks, decided from the tree alone: the file exists and validates.
     Preflight runs them before anything that reaches GitHub, so a missing or broken
-    plan is reported as such and never masked by a gh failure."""
+    plan is reported as such and never masked by a gh failure. Returns the refusals and,
+    for a plan that validates, validate's warnings (the gate-config stems a step names
+    without the basename), which refuse nothing: the preflight command prints them once."""
     resolved = Path(plan_path)
     if not resolved.is_absolute():
         resolved = root / resolved
     if not resolved.is_file():
-        return [f"no plan at {resolved}"]
-    if next_plan.validate_text(resolved.read_text(encoding="utf-8")):
-        return ["plan does not validate (run next_plan.py validate for line-numbered reasons)"]
-    return []
+        return [f"no plan at {resolved}"], []
+    text = resolved.read_text(encoding="utf-8")
+    if next_plan.validate_text(text):
+        reason = "plan does not validate (run next_plan.py validate for line-numbered reasons)"
+        return [reason], []
+    return [], [msg for _ln, msg in next_plan.validate_warnings(text)]
 
 
 def _exempt_in_next_batch(root: Path, plan_path: Path) -> int | None:
@@ -996,7 +999,7 @@ def preflight_checks(
     open_next_auto_prs: list[tuple[int, str]] | None,
     pr_listing_cause: str = "",
 ) -> list[str]:
-    reasons = check_plan(root, plan_path)
+    reasons, _warnings = check_plan(root, plan_path)
     if reasons and reasons[0].startswith("no plan at"):
         # No plan is the end of it: every later check reads the plan.
         return reasons
@@ -1199,7 +1202,13 @@ def append_plan(root: Path, section: str, entry: str) -> None:
     run id so an agent's unreviewed ruling reads differently from one the owner wrote."""
     state = load_state(root)
     plan_path = Path(state["worktree"]) / state["plan"]
-    tagged = f"{entry.strip()} [run {state['run_id']}]"
+    tag = f"[run {state['run_id']}]"
+    body = entry.strip()
+    # an entry whose note already ends with this run's tag carries it once; another run's tag
+    # is part of the entry and stays
+    if body.endswith(tag):
+        body = body[: -len(tag)].rstrip()
+    tagged = f"{body} {tag}"
     plan_path.write_bytes(next_plan.append_section_bytes(plan_path.read_bytes(), section, tagged))
 
 
@@ -3000,23 +3009,31 @@ class TitleRefusedError(ValueError):
     """A commit title that already carries a conventional prefix; nothing is committed."""
 
 
-def commit_step(worktree: Path, n: int, title: str) -> str:
+def _refuse_prefixed(title: str) -> None:
     prefix = CONVENTIONAL_PREFIX_RE.match(title)
     if prefix:
         raise TitleRefusedError(
             f'the title already carries a conventional prefix ("{prefix.group(0)}"); '
             "pass the subject only"
         )
-    message = f"feat(step-{n}): {title}"
+
+
+def _commit_index(worktree: Path, message: str, what: str) -> str:
+    """One `git commit` of the index with hooks on, the call every engine commit goes through.
+    A pre-commit formatter may have modified files; re-add and retry once (M2). A hook that
+    refused without modifying anything gets no second run."""
     r = git(worktree, "commit", "-m", message, check=False)
-    # a pre-commit formatter may have modified files; re-add and retry once (M2). A hook
-    # that refused without modifying anything gets no second run.
     if r.returncode != 0 and _hook_modified_files(worktree):
         git(worktree, "add", "-A")
         r = git(worktree, "commit", "-m", message, check=False)
     if r.returncode != 0:
-        raise RuntimeError(f"commit failed for step {n}: {r.stdout}\n{r.stderr}")
+        raise RuntimeError(f"commit failed for {what}: {r.stdout}\n{r.stderr}")
     return git(worktree, "rev-parse", "HEAD").stdout.strip()
+
+
+def commit_step(worktree: Path, n: int, title: str) -> str:
+    _refuse_prefixed(title)
+    return _commit_index(worktree, f"feat(step-{n}): {title}", f"step {n}")
 
 
 def commit_attended(
@@ -3083,6 +3100,70 @@ def commit_attended(
     failed = record_step(root, root, parsed, n, sha, result_path, record, plan_text=plan_text)
     if failed:
         return 2, f"COMMIT {sha} RECORD FAILED step {n}: {failed}"
+    return 0, f"COMMIT {sha}"
+
+
+BOUNDARY_SUBJECT = "record the review findings"
+
+
+def _boundary_subject(parsed: next_plan.Plan) -> str:
+    """The default subject of the boundary commit: the chunk of the last DONE step, so the
+    commit names the chunk the review covered; the fixed subject for a plan with no chunks."""
+    done = [s for s in parsed.steps if s.state == "DONE" and s.chunk]
+    if not done:
+        return BOUNDARY_SUBJECT
+    label = next_plan.chunk_label(done[-1].chunk)
+    return f"record the Chunk {label} review findings"
+
+
+def boundary_commit(
+    root: Path, title: str = "", *, plan: str = "prompt_plan.md"
+) -> tuple[int, str]:
+    """`boundary-commit` (sweep spec R3), run-less: commit the plan alone at the chunk boundary,
+    after the Findings append, as `docs(plan): <subject>`, with the record beside it under
+    Record. Nothing else is staged: the plan and the record are the boundary's own changes.
+    Returns (exit code, one line): 0 committed, 1 refused or the commit failed, 2 apparatus."""
+    try:
+        if load_state(root) is not None:
+            return 1, "COMMIT REFUSED boundary: a run is live"
+        try:
+            _refuse_prefixed(title)
+        except TitleRefusedError as exc:
+            return 1, f"COMMIT REFUSED boundary: {exc}"
+        plan_tracked = plan_is_tracked(root, plan)
+        parsed = next_plan.parse_plan((root / plan).read_text(encoding="utf-8"))
+        record = plan_record(parsed)
+        allowed = [plan] + ([record_path(record[1])] if record else [])
+        status = [(ln[:2], ln[3:]) for ln in git(root, "status", "--porcelain").stdout.splitlines()]
+        changed = [path for _, path in status]
+        if plan not in changed:
+            return 1, "COMMIT REFUSED boundary: the plan has no change"
+        # the first path that is not the boundary's own, by its index state: a step's work
+        # beside the plan would otherwise ride in a docs(plan) commit
+        for xy, path in status:
+            if path in allowed:
+                continue
+            how = "untracked" if xy == "??" else "modified" if xy[0] == " " else "staged"
+            return 1, (
+                f"COMMIT REFUSED boundary: {path} is {how}; "
+                "only the plan and the record may change"
+            )
+        git(root, "add", "--", *[p for p in allowed if p in changed])
+        reason = check_staged_safe(
+            root,
+            staged_files(root),
+            untracked_plan=None if plan_tracked else plan,
+            toolchain=next_plan.plan_toolchain_globs(parsed),
+        )
+        if reason:
+            return 1, f"COMMIT REFUSED boundary: {reason}"
+        message = f"docs(plan): {title or _boundary_subject(parsed)}"
+        try:
+            sha = _commit_index(root, message, "boundary")
+        except RuntimeError as exc:
+            return 1, f"COMMIT FAIL boundary: {' '.join(str(exc).split())}"
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return 2, f"COMMIT APPARATUS boundary: {exc}"
     return 0, f"COMMIT {sha}"
 
 
@@ -3397,6 +3478,12 @@ def preflight_noted(root: Path, sha: str) -> bool:
     return git(root, "notes", "--ref=preflight", "show", sha, check=False).returncode == 0
 
 
+def preflight_note_required() -> bool:
+    """True when ADW_PREFLIGHT_NOTE is exactly `required`: the private estate's setting, where the
+    preflight plugin writes the note; a public install has no writer and is not asked for one."""
+    return os.environ.get(PREFLIGHT_NOTE_VAR) == "required"
+
+
 def _gh_detail(r: subprocess.CompletedProcess) -> str:
     return r.stderr.strip() or r.stdout.strip() or f"gh exited {r.returncode}"
 
@@ -3499,7 +3586,7 @@ def merge_pr(
     reason = _chain_verdict_reason(root, chain)
     if reason:
         reasons.append(reason)
-    if not preflight_noted(root, sha):
+    if preflight_note_required() and not preflight_noted(root, sha):
         reasons.append(f"no preflight note on {sha}")
     size = int(pr.get("additions") or 0) + int(pr.get("deletions") or 0)
     if size > RUN_SIZE_LIMIT:
@@ -3553,27 +3640,33 @@ def derive_reason(plan: next_plan.Plan) -> str:
     return "stopped before any step completed"
 
 
-# the plan header's Spec: field up to its first `. `, and a record's approval line
+# the plan header's Spec: and Intent: fields up to their first `. `, and a record's approval line
 _SPEC_RE = re.compile(r"^Spec: (.*?)(?:\. |$)", re.M)
+_INTENT_RE = re.compile(r"^Intent: (.*?)(?:\. |$)", re.M)
 _APPROVED_RE = re.compile(r"\bplan\.approved plan=(\S+) by=(\S+)")
 
 
 def body_lines(state: dict) -> list[str]:
     """The plain lines that end both bodies (R18, D32): `Spec:` from the plan header,
-    `Closes:` the DONE steps' ids in plan order without repeats, and `Approved-by:` the `by` of
-    the last plan.approved line in the worktree's record for the plan's hash. A line with no
-    value is left out; a plan with Record whose record approves no line for its hash raises,
-    so wrap-up stops before the push with the marker kept."""
+    `Closes:` the DONE steps' ids in plan order without repeats, `Intent:` from the plan
+    header's first such line (sweep spec R6), and `Approved-by:` the `by` of the last
+    plan.approved line in the worktree's record for the plan's hash. A line with no value is
+    left out; a plan with Record whose record approves no line for its hash raises, so wrap-up
+    stops before the push with the marker kept."""
     wt = Path(state["worktree"])
     text = (wt / state["plan"]).read_text(encoding="utf-8")
     plan = next_plan.parse_plan(text)
     lines = []
-    spec = _SPEC_RE.search(text.split("\n## ", 1)[0])
+    header = text.split("\n## ", 1)[0]
+    spec = _SPEC_RE.search(header)
     if spec and spec.group(1).strip():
         lines.append(f"Spec: {spec.group(1).strip()}")
     closes = dict.fromkeys(i for s in plan.steps if s.state == "DONE" for i in s.closes)
     if closes:
         lines.append(f"Closes: {', '.join(closes)}")
+    intent = _INTENT_RE.search(header)
+    if intent and intent.group(1).strip():
+        lines.append(f"Intent: {intent.group(1).strip()}")
     record = plan_record(plan)
     if record is not None:
         want = next_plan.plan_hash(text)
@@ -3628,6 +3721,8 @@ def summary_sections(state: dict, reason: str | None = None) -> list[tuple[str, 
         f"- Branch: {state['branch']}",
         f"- Stop reason: {reason}",
     ]
+    if not state.get("steps"):
+        head.append("- No pull request: the run committed no step")
     steps = ["### Steps", ""]
     for step in plan.steps:
         note = f" ({step.note})" if step.note else ""
@@ -3682,6 +3777,16 @@ def write_summary(state: dict, reason: str | None = None) -> Path:
     return path
 
 
+def _bring_plan_home(root: Path, state: dict, wt: Path) -> None:
+    """An untracked plan rides no branch, so neither the merge nor the local run branch can
+    carry its state back: the worktree copy (Status notes, Decisions, Findings) becomes the
+    root copy, with the PR open or at the hand-back, so the next preflight reads the run's
+    stop; the entries appended during the run carry their [run id] tag. A tracked plan's
+    state is the chore(plan) commit on the run branch."""
+    if not state.get("plan_tracked", True):
+        (Path(root) / state["plan"]).write_bytes((wt / state["plan"]).read_bytes())
+
+
 def wrap_up(root: Path, *, repo_slug: str | None = None, reason: str | None = None) -> dict:
     """Close a run: commit the plan, write the summary, push, open the hold-only PR,
     and only then remove the marker. Any failure before the PR exists leaves the marker
@@ -3718,6 +3823,26 @@ def wrap_up(root: Path, *, repo_slug: str | None = None, reason: str | None = No
 
     summary = write_summary(state, reason)
 
+    if not state.get("steps"):
+        # the hand-back (carries spec R11): the run committed no step, so there is nothing to
+        # push and no pull request to open; the summary and the local run branch keep what the
+        # run decided, no gh call is made, and the marker goes so the guard hook stands down
+        _bring_plan_home(root, state, wt)
+        state["stop_reason"] = reason
+        state["pr_url"] = ""
+        save_state(state)
+        marker = find_state_file(root)
+        if marker is not None:
+            marker.unlink()
+        return {
+            "reason": reason,
+            "pr_number": None,
+            "pr_url": "",
+            "summary": str(summary),
+            "record": None,
+            "no_pr": True,
+        }
+
     slug = repo_slug or origin_repo(root)
     if not slug:
         raise RuntimeError("could not derive owner/repo from the origin URL")
@@ -3752,20 +3877,14 @@ def wrap_up(root: Path, *, repo_slug: str | None = None, reason: str | None = No
     m = re.search(r"/pull/(\d+)", pr_url)
     pr_number = int(m.group(1)) if m else None
 
-    record_failure = record_note = None
-    # R12 records pr.opened for a run that committed at least one step
-    if record is not None and not state.get("steps"):
-        record_note = "RECORD SKIPPED pr.opened: the run committed no step"
-    elif record is not None:
+    record_failure = None
+    # R12 records pr.opened; the run committed a step, or it would have handed back above
+    if record is not None:
         _sha, record_failure = record_pr_opened(
             root, wt, record, pr_number, opened_on, branch, "auto", default=state["default"]
         )
 
-    if not tracked:
-        # An untracked plan rides no branch, so the merge cannot carry its state back.
-        # With the PR open, the worktree copy (Status notes, Decisions, Findings) becomes
-        # the root copy; the entries appended during the run carry their [run id] tag.
-        (Path(root) / state["plan"]).write_bytes((wt / state["plan"]).read_bytes())
+    _bring_plan_home(root, state, wt)
 
     state["stop_reason"] = reason
     state["pr_url"] = pr_url
@@ -3779,7 +3898,7 @@ def wrap_up(root: Path, *, repo_slug: str | None = None, reason: str | None = No
         "pr_url": pr_url,
         "summary": str(summary),
         "record": record_failure,
-        "record_note": record_note,
+        "no_pr": False,
     }
 
 
@@ -3848,6 +3967,9 @@ def main(argv: list[str] | None = None) -> int:
     vd.add_argument("--verdict", required=True, choices=["Approved", "NeedsFixes"])
     vd.add_argument("--report", required=True, help="the reviewer's report as saved")
     sub.add_parser("record-commit")
+    # the attended chunk boundary's commit of the plan alone; run-less, outside RUN_COMMANDS
+    bc = sub.add_parser("boundary-commit")
+    bc.add_argument("--title", default="", help="the subject after docs(plan):")
     po = sub.add_parser("pr-opened")
     po.add_argument("n", type=int)
     pa = sub.add_parser("plan-approved")
@@ -3892,6 +4014,11 @@ def main(argv: list[str] | None = None) -> int:
             print(line, file=sys.stderr if rc else sys.stdout)
         return rc
 
+    if args.cmd == "boundary-commit":
+        rc, line = boundary_commit(root, args.title)
+        print(line, file=sys.stderr if rc else sys.stdout)
+        return rc
+
     if args.cmd in ("verdict", "done-verdict", "record-commit", "pr-opened", "plan-approved"):
         if args.cmd == "verdict":
             report = Path(args.report)
@@ -3926,7 +4053,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # The plan is decided from the tree, so it comes before gh: with gh
         # unavailable the operator still reads "no plan", not the gh failure.
-        for r in check_plan(root, Path(args.plan)):
+        plan_refusals, plan_warnings = check_plan(root, Path(args.plan))
+        for r in plan_refusals:
             print(f"PREFLIGHT REFUSED: {r}", file=sys.stderr)
             return 1
         # An untracked plan in a fresh clone shows as `??` until it is excluded, and the
@@ -3960,6 +4088,10 @@ def main(argv: list[str] | None = None) -> int:
         ensure_ignored(root, RUN_SUBDIR + "/")
         if (root / ".env").exists():
             ensure_ignored(root, ".env")
+        # the plan-time warnings, once, after every check has passed: a step that names a
+        # gate-config stem without its basename will fail the gate at its edit
+        for w in plan_warnings:
+            print(f"PREFLIGHT WARN {w}", file=sys.stderr)
         print("PREFLIGHT OK")
         return 0
 
@@ -3969,7 +4101,13 @@ def main(argv: list[str] | None = None) -> int:
         if slug in NEVER_AUTO:
             print(f"START FAILED: {slug} is never an unattended target", file=sys.stderr)
             return 1
-        for r in check_plan(root, Path(args.plan)):
+        # the owner allow-list, as preflight and merge apply it (sweep spec R2)
+        owner_why = owner_reason(slug.split("/", 1)[0] if slug else None)
+        if owner_why:
+            print(f"START FAILED: {owner_why}; auto runs only in repos they own", file=sys.stderr)
+            return 1
+        plan_refusals, _warnings = check_plan(root, Path(args.plan))
+        for r in plan_refusals:
             print(f"START FAILED: {r}", file=sys.stderr)
             return 1
         # the plan's approval is on the record before any step runs (ai-dlc-record R13)
@@ -4125,11 +4263,12 @@ def main(argv: list[str] | None = None) -> int:
         except RuntimeError as exc:
             print(f"WRAP-UP FAILED: {exc}", file=sys.stderr)
             return 1
+        if result["no_pr"]:
+            print(f"RUN STOPPED {result['reason']} {NO_PR_SUFFIX}")
+            return 0
         pr = f" PR #{result['pr_number']}" if result["pr_number"] is not None else ""
         print(f"RUN STOPPED {result['reason']}{pr}")
         print(result["pr_url"])
-        if result["record_note"]:
-            print(result["record_note"])
         if result["record"]:
             print(f"RECORD FAILED after{pr or ' the PR'}: {result['record']}", file=sys.stderr)
             return 2

@@ -2,7 +2,7 @@
 
 This procedure takes one piece of work from an idea to a merged pull request with the adw plugin, so that every step is specified, planned, tested and reviewed before it ships.
 
-Companion to `ai-dev-workflow.md`, which holds the reasoning; this file holds only the moves. Updated: 2026-11-03.
+Companion to `ai-dev-workflow.md`, which holds the reasoning; this file holds only the moves. Updated: 2026-11-04.
 
 1. [Pick the weight class](#pick-the-weight-class)
 2. [Write the spec](#write-the-spec)
@@ -13,13 +13,13 @@ Companion to `ai-dev-workflow.md`, which holds the reasoning; this file holds on
 7. [Ship](#ship)
 8. [Close the loop](#close-the-loop)
 
-Two optional tasks sit beside these: set up a new repository, once per repository, and run the loop unattended for a plan that is already decomposed into mechanical steps.
+Three optional tasks sit beside these: set up a new repository, once per repository; write the intent, for work that spans more than one spec; and run the loop unattended for a plan that is already decomposed into mechanical steps.
 
 ## Before you begin
 
-- Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only.
+- Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only. A lower version prints one line and the hooks stand down.
 - For a Python project, `uv` is installed and the repository has a `uv.lock`; the plan's Test and Lint commands start with `uv run`, and an unattended run syncs the environment with `uv sync --locked`.
-- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.8 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
+- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.9 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
 - `gh` is authenticated as a user who can push to the target repository and open pull requests.
 - The repository has pre-commit installed; see Optional: Set up a new repository.
 - For unattended runs, `ADW_OWNERS` in the `env` block of the user's settings names the GitHub owners a run may target.
@@ -53,6 +53,17 @@ To set up a repository:
 
 6. Confirm `.env` is in `.gitignore` before any secret exists.
 7. In a repository with an eval harness, add the eval run command to the `CLAUDE.md` Commands section.
+
+## Optional: Write the intent
+
+Perform this task when the work spans more than one spec, or when a reader will ask what the work was for after its pull requests are merged. It is optional in every weight class; a change that fits one spec needs no intent, and no command asks for one. The reasoning and the file's shape are in `docs/intent.md`.
+
+To write the intent:
+
+1. Create `docs/intents/<id>.md` with the seven sections in order (problem and outcome, who it serves, in and out of scope, acceptance scenarios, rules by reference, dependencies as boundaries, open questions), under 8 KB, naming no repository, model or size.
+2. Add the intent's row to the Now table of `docs/setup-plan.md`: under `## Intents`, a `### Now` subsection holding a table with an `Intent` column and a `Specs` column, created when the file has none, the Specs cell naming the specs that serve the intent as they are written.
+3. Name the id in the `/adw:spec` request, so the spec's header carries `Intent: <id>`; `/adw:plan-tdd` copies the line into the plan header.
+4. Put `Intent: <id>` among the trailer lines of the pull request body when you open one by hand; from 3.5.9 an unattended run writes it from the plan header at wrap-up.
 
 ## Pick the weight class
 
@@ -141,7 +152,7 @@ To run the loop:
    Use a subagent to review the diff against prompt_plan.md step N. Flag only gaps that affect correctness or stated requirements.
    ```
 
-9. Run `/adw:next` again at each boundary until no incomplete prompt remains. When the boundary review appended a finding to the plan, the plan file is left modified with nothing to commit it; commit it yourself before the next run, or its clean-tree check stops there.
+9. Run `/adw:next` again at each boundary until no incomplete prompt remains. When the boundary review appended a finding to the plan, the loop commits the plan alone with `python3 $AUTO boundary-commit` (`docs(plan): record the Chunk <label> review findings`), which refuses any other change in the tree; without that commit the next run's clean-tree check stops there.
 
 ## Optional: Run the loop unattended
 
@@ -156,7 +167,7 @@ To run the loop unattended:
 5. Leave it alone and come back to the PR.
 6. Review the PR body: steps done, failed and blocked, every ruling with its cost-if-wrong, and the findings. On a private repository the body also carries each step's report (the prove-red result, mutation evidence); on a public one those stay in `summary.md` under `.next-auto/<run-id>/`.
 7. Prune the outbox: keep, fold, or delete each `[run <id>]` entry in Decisions and Findings before the next run reads them. A tracked plan carries them through the merge; an untracked plan was copied back to the root at wrap-up.
-8. Merge through the gate, or push back. The run cannot merge, and the guard hook denies a merge attempt (`gh pr merge` and `next_auto.py merge` alike) for as long as the run-state file exists. Once the run is over and the PR is reviewed, the PR is merged by `python3 <installPath>/scripts/next_auto.py merge <n>` in its own Bash call: it re-runs Test and Lint at the PR head, requires a verdict record for that head and a preflight note on it, refuses a diff over 500 lines, a draft, a ruleset that still requires an approval, and any change on the security surface, then merges with `--squash --delete-branch`, never `--auto` and never `--admin`. The record the gate reads is written before `merge` is attempted: the chunk reviewer's `Approved` in `.next-auto/attended/verdict-<sha>.json` (keys `head`, `verdict`, `reviewer`, `model`, `round`), or an independent done check's `APPROVED` over the done claim in `done-<sha>.json`, written by `done-verdict`; an unattended run's own reviews are kept in its run directory and do not satisfy the gate, so a person runs `review-package` and `verdict` against the PR head first. A refusal, a repository the owner does not own, and every `--admin` merge are the owner's act by PR number; `--admin` appears in no command text.
+8. Merge through the gate, or push back. The run cannot merge, and the guard hook denies a merge attempt (`gh pr merge` and `next_auto.py merge` alike) for as long as the run-state file exists. Once the run is over and the PR is reviewed, the PR is merged by `python3 <installPath>/scripts/next_auto.py merge <n>` in its own Bash call: it re-runs Test and Lint at the PR head, requires a verdict record for that head and, with `ADW_PREFLIGHT_NOTE=required` in your settings, a preflight note on it, refuses a diff over 500 lines, a draft, a ruleset that still requires an approval, and any change on the security surface, then merges with `--squash --delete-branch`, never `--auto` and never `--admin`. The record the gate reads is written before `merge` is attempted: the chunk reviewer's `Approved` in `.next-auto/attended/verdict-<sha>.json` (keys `head`, `verdict`, `reviewer`, `model`, `round`), or an independent done check's `APPROVED` over the done claim in `done-<sha>.json`, written by `done-verdict`; an unattended run's own reviews are kept in its run directory and do not satisfy the gate, so a person runs `review-package` and `verdict` against the PR head first. A refusal, a repository the owner does not own, and every `--admin` merge are the owner's act by PR number; `--admin` appears in no command text.
 
 ## Allow rules for the attended loop in auto mode
 

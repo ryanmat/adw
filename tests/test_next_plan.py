@@ -2,6 +2,7 @@
 # Description: Real files in tmp dirs, no mocks; fixtures vendored from the legacy plan styles.
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -472,6 +473,34 @@ def test_append_preserves_other_bytes(tmp_path):
     head_before = before.split(b"## Findings")[0]
     head_after = after.split(b"## Findings")[0]
     assert head_before == head_after
+
+
+# ---- the appender's newline guard (carries spec R14, Step 11 of the 3.5.9 engine plan) --------
+
+
+def test_append_puts_the_bullet_on_its_own_line_after_an_unterminated_last_bullet():
+    """A section whose last bullet lacks the file's newline (a plan saved without one, or a
+    hand edit at the end of the file) gets the new bullet on its own line, the old bullet intact;
+    without the guard the two bullets joined on one line."""
+    data = CANON.replace("## Findings\n(none)\n", "## Findings\n- first finding").encode("utf-8")
+    assert not data.endswith(b"\n")
+    out = next_plan.append_section_bytes(data, "findings", "Minor: second finding.")
+    assert out.endswith(b"## Findings\n- first finding\n- Minor: second finding.\n")
+    assert b"first finding- Minor" not in out
+
+
+def test_append_after_a_terminated_last_bullet_is_byte_identical_to_the_plain_insertion():
+    """A section ending in the file's newline is unchanged from the appender's output before
+    the guard: the new bullet follows the last one, no blank line between, nothing else moved."""
+    data = CANON.replace("## Findings\n(none)\n", "## Findings\n- first finding\n").encode("utf-8")
+    out = next_plan.append_section_bytes(data, "findings", "Minor: second finding.")
+    expected = CANON.replace(
+        "## Findings\n(none)\n", "## Findings\n- first finding\n- Minor: second finding.\n"
+    ).encode("utf-8")
+    assert out == expected
+    crlf = data.replace(b"\n", b"\r\n")
+    out_crlf = next_plan.append_section_bytes(crlf, "findings", "Minor: second finding.")
+    assert out_crlf == expected.replace(b"\n", b"\r\n")
 
 
 # ---- migration --------------------------------------------------------------
@@ -1825,3 +1854,298 @@ def test_validate_refuses_a_shares_line_with_no_class():
 
 def test_a_plan_with_no_shares_line_shares_nothing():
     assert next_plan.plan_shares(next_plan.parse_plan(_closes_plan(""))) == set()
+
+
+# ---- the gate-config warning (carries spec R13, its 3(b); Step 12 of the 3.5.9 engine plan) --
+# A step that says "the pyproject's dependency list" and never `pyproject.toml` passes
+# validate today and fails at the gate, which authorizes a config edit only when the step text
+# contains the basename. validate warns at plan time, never refuses.
+
+PYPROJECT_WARNING = (
+    "Step 2: names pyproject without its basename pyproject.toml; the gate authorizes a "
+    "config edit only when the step text contains the basename"
+)
+
+
+def _plan_with_step_2_text(text):
+    return CANON.replace("Build the engine on top of the parser.", text)
+
+
+def test_validate_warnings_names_a_stem_without_its_basename():
+    text = _plan_with_step_2_text("Add httpx to the pyproject's dependency list.")
+    assert next_plan.validate_warnings(text) == [(20, PYPROJECT_WARNING)]
+
+
+def test_validate_warnings_is_silent_when_the_basename_is_present_too():
+    text = _plan_with_step_2_text(
+        "Add httpx to the pyproject's dependency list in pyproject.toml."
+    )
+    assert next_plan.validate_warnings(text) == []
+
+
+@pytest.mark.parametrize(
+    "step_2_text",
+    [
+        "Run ruff check over the module.",
+        "Add a conftest fixture to conftest.py for the fake origin.",
+        "Clean up the toxic data path.",
+        "Build the engine on top of the parser.",
+    ],
+)
+def test_validate_warnings_ignores_prose_stems_and_whole_words(step_2_text):
+    assert next_plan.validate_warnings(_plan_with_step_2_text(step_2_text)) == []
+
+
+def test_validate_warnings_ignores_a_done_step():
+    text = CANON.replace(
+        "Write tests for the parser first, then implement it.",
+        "Pin the version in the pyproject's dependency list.",
+    )
+    assert next_plan.validate_warnings(text) == []
+
+
+def test_validate_cli_prints_the_warning_on_stderr_and_still_exits_0(tmp_path):
+    text = _plan_with_step_2_text("Add httpx to the pyproject's dependency list.")
+    p = write(tmp_path, text)
+    r = run_cli("validate", str(p))
+    assert r.returncode == 0, r.stderr
+    assert r.stderr.splitlines() == [f"{p}:20: WARN {PYPROJECT_WARNING}"]
+    assert next_plan.validate_text(text) == []
+
+
+def test_validate_warnings_names_each_of_the_other_three_stems():
+    """Chunk E review Minor, carried into Step 14: a positive case per remaining stem, so
+    dropping one from GATE_CONFIG_STEMS or slicing its extension wrong fails a test."""
+    cases = {
+        "Add a conftest fixture for the fake origin.": "conftest without its basename conftest.py",
+        "Add the ruff hook to the pre-commit-config.": (
+            "pre-commit-config without its basename .pre-commit-config.yaml"
+        ),
+        "Run tox -e py312 before the commit.": "tox without its basename tox.ini",
+    }
+    for step_2_text, expected in cases.items():
+        warnings = next_plan.validate_warnings(_plan_with_step_2_text(step_2_text))
+        assert len(warnings) == 1, step_2_text
+        assert warnings[0][1].startswith(f"Step 2: names {expected};"), warnings[0][1]
+
+
+# ---- renumber (carries spec R15, Step 14 of the 3.5.9 engine plan) -------------------------------
+# The project-b store was renumbered by ten hand scripts between 2026-09-21 and 2026-10-23, two
+# of which swept the step bodies and not Decisions and Findings. renumber_text relabels the
+# PENDING steps from a number up and every whole-word `Step <n>` reference to them, wherever
+# it sits.
+
+RENUMBER_PLAN = """\
+# Widget Implementation Plan
+Spec: spec.md. Owner: the owner. Written: 2026-09-11.
+
+## Conventions binding every step
+- Test: uv run pytest
+- Lint: uv run ruff check .
+- Run: uv run python -m widget
+
+### Step 5: parser
+Status: DONE (42 tests green; the split moved its tail to Step 7)
+Eval: no
+Mutation: required
+Write tests for the parser first. Step 7 takes the tail.
+
+### Step 6: lexer
+Status: DONE (done)
+Eval: no
+Mutation: required
+The lexer.
+
+### Step 7: engine
+Status: PENDING
+Eval: no
+Mutation: required
+Build the engine on Step 6; Step 12 reads it. Step 70 is a typo kept on purpose.
+
+### Step 8: judge
+Status: PENDING
+Eval: no
+Mutation: required
+Add the LLM judge after Step 7.
+
+### Step 12: report
+Status: PENDING
+Eval: no
+Mutation: required
+Render the report from Step 7 and Step 8; Step 5 is untouched.
+
+## Decisions
+- Step 7: sqlite or json? Step 12 depends on it; Step 5 does not.
+
+## Findings
+- Minor: Step 12 and Step 70 share a word; Step 5 is done.
+- Legacy step map: 3 -> 5, 4 -> 6
+"""
+
+
+def test_renumber_text_relabels_the_pending_steps_and_every_reference():
+    out, _mapping, _counts = next_plan.renumber_text(RENUMBER_PLAN, start=7, by=1)
+    plan = next_plan.parse_plan(out)
+    assert [s.number for s in plan.steps] == [5, 6, 8, 9, 13]
+    assert next_plan.validate_text(out) == []
+    # a DONE step keeps its number, its Status note follows the moved step
+    assert (
+        "### Step 5: parser\nStatus: DONE (42 tests green; the split moved its tail to Step 8)"
+    ) in out
+    assert "Write tests for the parser first. Step 8 takes the tail." in out
+    # bodies, Decisions and Findings
+    assert "Build the engine on Step 6; Step 13 reads it. Step 70 is a typo kept on purpose." in out
+    assert "Add the LLM judge after Step 8." in out
+    assert "Render the report from Step 8 and Step 9; Step 5 is untouched." in out
+    assert "- Step 8: sqlite or json? Step 13 depends on it; Step 5 does not." in out
+    assert "- Minor: Step 13 and Step 70 share a word; Step 5 is done." in out
+    assert "- Legacy step map: 3 -> 5, 4 -> 6" in out
+    assert not re.search(r"Step (7|12)(?![0-9])", out)
+
+
+def test_renumber_text_returns_the_map_and_the_per_section_counts():
+    out, mapping, counts = next_plan.renumber_text(RENUMBER_PLAN, start=7, by=1)
+    assert mapping == {7: 8, 8: 9, 12: 13}
+    assert counts == {"headers": 3, "status": 1, "bodies": 5, "decisions": 2, "findings": 1}
+    assert next_plan.unmapped_step_references(out, mapping) == [5, 6, 70]
+
+
+@pytest.mark.parametrize("state", ["DONE (x)", "IN PROGRESS", "BLOCKED (y)", "FAILED (z)"])
+def test_renumber_text_refuses_a_step_in_range_that_is_not_pending(state):
+    text = RENUMBER_PLAN.replace(
+        "### Step 8: judge\nStatus: PENDING", f"### Step 8: judge\nStatus: {state}"
+    )
+    with pytest.raises(next_plan.RenumberError) as exc:
+        next_plan.renumber_text(text, start=7, by=1)
+    assert "Step 8" in str(exc.value) and state.split(" (")[0] in str(exc.value)
+    assert next_plan.unmapped_step_references(text, {}) == [5, 6, 7, 8, 12, 70]
+
+
+@pytest.mark.parametrize(
+    "by, words",
+    [(0, ["by", "0"]), (-1, ["by", "-1", "positive"])],
+)
+def test_renumber_text_refuses_a_zero_and_a_negative_shift(by, words):
+    """Step 19 (Chunk F review): the carries spec names positive shifts alone, an insertion or a
+    split, so a negative one is refused before any collision could arise."""
+    with pytest.raises(next_plan.RenumberError) as exc:
+        next_plan.renumber_text(RENUMBER_PLAN, start=7, by=by)
+    for w in words:
+        assert w in str(exc.value), (w, str(exc.value))
+
+
+def test_renumber_text_refuses_a_start_above_every_step(tmp_path):
+    """Step 19 (Chunk F review): a typo in --from is a refusal, never an empty map written as a
+    success with a dangling separator on the map line."""
+    with pytest.raises(next_plan.RenumberError) as exc:
+        next_plan.renumber_text(RENUMBER_PLAN, start=99, by=1)
+    assert "99" in str(exc.value) and "no step" in str(exc.value)
+    p = write(tmp_path, RENUMBER_PLAN)
+    before = p.read_bytes()
+    r = run_cli("renumber", str(p), "--from", "99", "--by", "1")
+    assert r.returncode == 2 and r.stdout == "" and "no step" in r.stderr
+    assert p.read_bytes() == before
+
+
+PLURAL_PLAN = RENUMBER_PLAN.replace(
+    "Render the report from Step 7 and Step 8; Step 5 is untouched.",
+    "Render the report from Steps 7 and 8; Steps 7, 8 and 12 share the fixture; Steps 7 to 8"
+    " run first; Steps 70 and 71 are typos kept on purpose; Step 5 is untouched.",
+)
+
+
+def test_renumber_text_rewrites_plural_step_references_number_by_number():
+    """Step 19 (Chunk F review): `Steps 7 and 8`, `Steps 7, 8 and 12` and `Steps 7 to 8` are
+    references too; a sweep that skipped them left the stale pointers the spec was written to
+    end."""
+    out, mapping, counts = next_plan.renumber_text(PLURAL_PLAN, start=7, by=1)
+    assert (
+        "Render the report from Steps 8 and 9; Steps 8, 9 and 13 share the fixture; Steps 8 to 9"
+        " run first; Steps 70 and 71 are typos kept on purpose; Step 5 is untouched."
+    ) in out
+    assert counts["bodies"] == 5 - 2 + 7
+    assert next_plan.unmapped_step_references(out, mapping) == [5, 6, 70, 71]
+    assert next_plan.unmapped_step_references("Steps 70 and 71", {}) == [70, 71]
+
+
+# ---- the renumber command (carries spec R15, Step 15 of the 3.5.9 engine plan) -----------------
+
+SECTION_LINES = ["headers: 3", "status: 1", "bodies: 5", "decisions: 2", "findings: 1"]
+
+
+def test_renumber_cli_rewrites_the_file_and_reports_per_section(tmp_path):
+    """The file changes only where the map applies, in the file's own newline style; stdout
+    carries one line per section with its count and one line naming the labels left alone."""
+    out_text, _mapping, _counts = next_plan.renumber_text(RENUMBER_PLAN, start=7, by=1)
+    expected = out_text.replace(
+        "- Legacy step map: 3 -> 5, 4 -> 6\n",
+        "- Legacy step map: 3 -> 5, 4 -> 6, 7 -> 8, 8 -> 9, 12 -> 13\n",
+    )
+    assert expected != out_text
+    for newline in ("\n", "\r\n"):
+        d = tmp_path / newline.encode().hex()
+        d.mkdir()
+        p = write(d, RENUMBER_PLAN, newline=newline)
+        r = run_cli("renumber", str(p), "--from", "7", "--by", "1")
+        assert r.returncode == 0, r.stderr
+        assert p.read_bytes() == expected.replace("\n", newline).encode("utf-8")
+        assert r.stdout.splitlines() == [
+            f"renumbered {p}: 7 -> 8, 8 -> 9, 12 -> 13",
+            *SECTION_LINES,
+            "left alone: Step 5, Step 6, Step 70",
+        ]
+    assert not (Path(__file__).parent / ".tmp-renumber").exists()
+
+
+def test_renumber_cli_creates_the_map_line_once_and_extends_it(tmp_path):
+    p = write(tmp_path, RENUMBER_PLAN.replace("- Legacy step map: 3 -> 5, 4 -> 6\n", ""))
+    assert "Legacy step map" not in p.read_text()
+    r = run_cli("renumber", str(p), "--from", "7", "--by", "1")
+    assert r.returncode == 0, r.stderr
+    findings = p.read_text().split("## Findings\n", 1)[1]
+    assert findings == (
+        "- Minor: Step 13 and Step 70 share a word; Step 5 is done.\n"
+        "- Legacy step map: 7 -> 8, 8 -> 9, 12 -> 13\n"
+    )
+    r = run_cli("renumber", str(p), "--from", "9", "--by", "1")
+    assert r.returncode == 0, r.stderr
+    findings = p.read_text().split("## Findings\n", 1)[1]
+    assert findings == (
+        "- Minor: Step 14 and Step 70 share a word; Step 5 is done.\n"
+        "- Legacy step map: 7 -> 8, 8 -> 9, 12 -> 13, 9 -> 10, 13 -> 14\n"
+    )
+    assert p.read_text().count("Legacy step map") == 1
+    assert [s.number for s in next_plan.parse_plan(p.read_text()).steps] == [5, 6, 8, 10, 14]
+
+
+def test_renumber_cli_refusal_leaves_the_file_unchanged(tmp_path):
+    p = write(tmp_path, RENUMBER_PLAN)
+    before = p.read_bytes()
+    r = run_cli("renumber", str(p), "--from", "6", "--by", "1")
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert r.stderr.strip() == (
+        f"{p}: Step 6 is DONE; a renumber moves PENDING steps only, and a DONE step's number "
+        "never changes"
+    )
+    assert p.read_bytes() == before
+    r = run_cli("renumber", str(p), "--from", "7", "--by", "0")
+    assert r.returncode == 2 and "by is 0" in r.stderr
+    assert p.read_bytes() == before
+
+
+def test_renumber_cli_keeps_a_migrated_plans_map_entries_first(tmp_path):
+    """A plan migrate_text relabelled carries the migration's map; a renumber extends that
+    line after the existing entries."""
+    migrated = next_plan.migrate_text(
+        "# X Implementation Plan\n\nrules.\n\n"
+        "## Step 11: a\nb mentions Step 20.\n\n## Step 20: c\nd\n\n## Step 18: e\nf\n"
+    )
+    assert next_plan.parse_plan(migrated).findings == "- Legacy step map: 11 -> 1, 20 -> 2, 18 -> 3"
+    p = write(tmp_path, migrated)
+    r = run_cli("renumber", str(p), "--from", "2", "--by", "1")
+    assert r.returncode == 0, r.stderr
+    plan = next_plan.parse_plan(p.read_text())
+    assert plan.findings == "- Legacy step map: 11 -> 1, 20 -> 2, 18 -> 3, 2 -> 3, 3 -> 4"
+    assert [s.number for s in plan.steps] == [1, 3, 4]
+    assert "b mentions Step 20." in p.read_text()

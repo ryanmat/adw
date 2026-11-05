@@ -119,14 +119,3 @@ def build(fixture: Fixture, root: Path | None = None, dirname: str | None = None
         _git(work, "add", "--", *paths)
         _git(work, "commit", "-q", "-m", message)
     return BuiltRepo(name=fixture.name, path=work, origin=origin, root=root)
-
-
-def load_tree(tree: Path) -> dict[str, str]:
-    """Read a stored fixture tree, mapping safe names onto their real dotted paths."""
-    files: dict[str, str] = {}
-    for p in sorted(tree.rglob("*")):
-        if not p.is_file() or p.name in DROP:
-            continue
-        rel = p.relative_to(tree).as_posix()
-        files[NAME_MAP.get(rel, rel)] = p.read_text(encoding="utf-8")
-    return files
