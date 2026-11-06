@@ -9,7 +9,7 @@
     {
       "name": "adw",
       "description": "/adw:spec, /adw:plan-tdd, /adw:next (attended and hold-only unattended), the plan-grammar and auto-run scripts with the plan-time step size estimate, the PreToolUse guard hook, the Stop hook, the opt-in ruling-log and ruling-recall hooks, the next-implementer and next-reviewer run agents, the spec-miner agent that mines a brownfield codebase into the baseline spec.md ahead of /adw:plan-tdd, and the markdown deliverables skill.",
-      "version": "3.5.10",
+      "version": "3.5.11",
       "author": {
         "name": "Ryan Matuszewski"
       },

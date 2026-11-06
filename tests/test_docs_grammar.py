@@ -169,8 +169,31 @@ def test_next_md_says_verdict_n_keeps_a_filtered_report():
         "### Dropped findings",
         "review-<sha>-<round>.orig.md",
         "work from the kept findings",
+        # 3.5.11 spec R4: the copy is written only when a finding was dropped (next_auto.py
+        # record_verdict's `if dropped:` branch), and the text says so
+        "when the filter dropped a finding",
     ):
         assert needle in doc, needle
+
+
+def test_next_md_item_11_names_the_stamp_line_the_check_log_ends_with():
+    """3.5.11 spec R7 (Chunk A review Minor): item 11 says check-N.log ends with one line of
+    the engine's own naming the HEAD, the base, the Test exit and the counts."""
+    doc = (COMMANDS / "next.md").read_text()
+    item_11 = doc.split("11. **Check.**", 1)[1].split("12. **Mark it done**", 1)[0]
+    assert "# check N: HEAD <sha>, base <sha>, Test exit <rc>" in item_11
+    assert "one line of the engine's own" in item_11
+
+
+def test_next_md_item_8_names_the_stale_bytecode_a_same_size_mutant_leaves():
+    """3.5.11 spec R4: the mutation-check item says a mutant the same size as the original
+    leaves a stale `__pycache__` entry (the bytecode cache is keyed on size and whole-second
+    mtime), and names the command that clears the directories before the re-run to green."""
+    doc = (COMMANDS / "next.md").read_text()
+    item_8 = doc.split("8. **Mutation check**", 1)[1].split("9. **Eval**", 1)[0]
+    assert "__pycache__" in item_8
+    assert "same size" in item_8
+    assert "find . -name __pycache__ -type d -prune -exec rm -rf {} +" in item_8
 
 
 # ---- Step 9, 2026-09-11: the adw plugin layout -----------------------------------------------
@@ -281,7 +304,7 @@ def test_marketplace_lists_adw_at_the_repo_root():
     assert entry["version"] == plugin["version"]
 
 
-RELEASE_VERSION = "3.5.10"
+RELEASE_VERSION = "3.5.11"
 
 
 def test_manifests_read_the_release_version_and_agree():
@@ -1359,6 +1382,22 @@ def test_r14_next_md_marks_the_step_failed_at_the_stop_on_red():
     assert "a step that is not `IN PROGRESS`" in hook
 
 
+def test_next_md_says_a_set_on_a_done_step_keeps_the_record():
+    """3.5.11 spec R2: the stop (b) and (c) sentences, the On red paragraph and the unattended
+    item 1 each say a set on a DONE step keeps the build record as `record: <note>` and that the
+    fix round's set N done writes it back."""
+    doc = (COMMANDS / "next.md").read_text()
+    stops = doc[doc.index("**Stops.**") : doc.index("**On red.**")]
+    b = stops[stops.index("- (b)") : stops.index("- (c)")]
+    c = stops[stops.index("- (c)") : stops.index("- (d)")]
+    red = doc[doc.index("**On red.**") : doc.index("**Rulings versus decisions.**")]
+    begin = doc.index("1. `python3 $AUTO step-begin K`")
+    item_1 = doc[begin : doc.index("2. Dispatch the `adw:next-implementer`")]
+    for section in (b, c, red, item_1):
+        assert "record: <note>" in section, section[:80]
+        assert "writes it back" in section, section[:80]
+
+
 def test_next_md_marks_an_apparatus_stop_on_the_plan():
     """ai-dlc-record R14, states table row S6: the loop marks the step blocked-apparatus when
     it stops on an apparatus code or CHECK APPARATUS, so the Stop hook stands down there as it
@@ -1445,6 +1484,18 @@ def test_next_md_item_12_appends_the_fix_round_after_the_record():
     item_12 = doc.split("12. **Mark it done**", 1)[1].split("13. **Commit on green.**", 1)[0]
     assert "; fix round: <note>" in item_12
     assert "stays in the commit history" not in item_12
+
+
+# 3.5.11 spec R8: the command text and this pin change in the step that lands the behaviour
+def test_next_md_item_12_exempts_a_comment_only_fix_round_from_the_mutation_words():
+    """3.5.11 spec R1 (ryanmat/adw#7): item 12 says a comment-only fix round needs no mutation
+    words and its commit records `mutation: n/a`, and names the re-run against the fixed tests
+    as the way through otherwise."""
+    doc = (COMMANDS / "next.md").read_text()
+    item_12 = doc.split("12. **Mark it done**", 1)[1].split("13. **Commit on green.**", 1)[0]
+    assert "a comment-only fix round" in item_12
+    assert "re-run them against the fixed tests" in item_12
+    assert "`mutation: n/a`" in item_12
 
 
 def test_next_md_item_12_names_the_focused_run_note_form():

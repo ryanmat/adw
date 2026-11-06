@@ -2,8 +2,8 @@
 
 Claude Code owns spec through ship in the terminal, with deterministic gates (tests, lint, pre-commit) holding the line for code and graded evals holding it for model behavior.
 
-Version: 3.5.10
-Last revised: 2026-11-05
+Version: 3.5.11
+Last revised: 2026-11-06
 
 The IDE reviews and the browser verifies. This document is for the human. Do not load it into agent context as standing instructions. The only machine-facing pieces are the install blocks in the "Config placement" section.
 
@@ -139,7 +139,7 @@ One home per contract: each command's source of truth is a standalone file under
 Install at user scope, pinned to a release tag. The marketplace add carries the pin, because a plugin sourced from the marketplace's own root follows the marketplace's commit:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.10
+claude plugin marketplace add ryanmat/adw@v3.5.11
 claude plugin install adw@adw --scope user
 ```
 

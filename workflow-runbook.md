@@ -19,7 +19,7 @@ Three optional tasks sit beside these: set up a new repository, once per reposit
 
 - Python 3.12 or later is on `PATH` as `python3`; the plugin's scripts are standard library only. A lower version prints one line and the hooks stand down, except the guard hook, which keeps its denials from 3.9.
 - For a Python project, `uv` is installed and the repository has a `uv.lock`; the plan's Test and Lint commands start with `uv run`, and an unattended run syncs the environment with `uv sync --locked`.
-- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.10 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
+- Claude Code has the adw plugin installed at user scope, pinned to a release tag at version 3.5.11 or later, with the install block in the Config placement section of `ai-dev-workflow.md`.
 - `gh` is authenticated as a user who can push to the target repository and open pull requests.
 - The repository has pre-commit installed; see Optional: Set up a new repository.
 - For unattended runs, `ADW_OWNERS` in the `env` block of the user's settings names the GitHub owners a run may target.

@@ -428,6 +428,94 @@ def test_set_status_pending_no_note(tmp_path):
     assert plan.steps[0].state == "PENDING"
 
 
+# ---- 3.5.11 spec R2: every state keeps a DONE step's build record ----------------------------
+
+# the clause as set N done writes it, copied from tests/test_next_auto.py FIXTURE_CLAUSE
+# (read 2026-11-05 at 84ec0ed)
+RECORD_CLAUSE = "check: 2150 passed of 2151 collected at base 24bc2b74, lint ok, red proved"
+RECORDED = CANON.replace(
+    "Status: DONE (42 tests green, abc1234)", f"Status: DONE (the note; {RECORD_CLAUSE})", 1
+)
+RECORD_STATES = [
+    ("failed", f"Status: FAILED (why; record: the note; {RECORD_CLAUSE})"),
+    ("blocked-decision", f"Status: BLOCKED (decision: why; record: the note; {RECORD_CLAUSE})"),
+    ("blocked-apparatus", f"Status: BLOCKED (apparatus: why; record: the note; {RECORD_CLAUSE})"),
+    ("in-progress", f"Status: IN PROGRESS (record: the note; {RECORD_CLAUSE})"),
+    ("pending", f"Status: PENDING (record: the note; {RECORD_CLAUSE})"),
+]
+
+
+@pytest.mark.parametrize(("cli_state", "expected"), RECORD_STATES)
+def test_set_status_keeps_a_done_steps_record_in_every_state(cli_state, expected):
+    """A set to any state but done on a DONE step whose Status carries an evidence clause keeps
+    the whole note after the state's own as `; record: <note>`, or as the parenthetical alone
+    for the two unwrapped states, and parse_plan reads the state back with the body as its
+    note."""
+    out = next_plan.set_status_bytes(RECORDED.encode(), 1, cli_state, "why").decode()
+    assert expected in out
+    step = next_plan.parse_plan(out).steps[0]
+    state = expected[len("Status: ") : expected.index(" (")]
+    assert (step.state, step.note) == (state, expected[len(f"Status: {state} (") : -1])
+
+
+def test_set_status_carries_the_record_once_on_a_second_set():
+    once = next_plan.set_status_bytes(RECORDED.encode(), 1, "blocked-apparatus", "why")
+    twice = next_plan.set_status_bytes(once, 1, "blocked-apparatus", "again").decode()
+    assert f"Status: BLOCKED (apparatus: again; record: the note; {RECORD_CLAUSE})" in twice
+    assert twice.count("record: ") == 1
+    resumed = next_plan.set_status_bytes(twice.encode(), 1, "in-progress", "").decode()
+    assert f"Status: IN PROGRESS (record: the note; {RECORD_CLAUSE})" in resumed
+
+
+@pytest.mark.parametrize("cli_state", [s for s, _ in RECORD_STATES])
+def test_set_status_writes_as_before_without_a_record(cli_state):
+    """CANON's Step 1 is DONE with no evidence clause and its Step 2 PENDING: neither carries a
+    record, and a set to done never carries one (set N done passes the whole note)."""
+    for n in (1, 2):
+        out = next_plan.set_status_bytes(CANON.encode(), n, cli_state, "why").decode()
+        assert "record:" not in out
+    bare = next_plan.set_status_bytes(CANON.encode(), 1, "in-progress", "").decode()
+    assert "Status: IN PROGRESS\n" in bare
+    done = next_plan.set_status_bytes(
+        RECORDED.encode(), 1, "done", f"fixed; {RECORD_CLAUSE}"
+    ).decode()
+    assert f"Status: DONE (fixed; {RECORD_CLAUSE})\n" in done and done.count("record:") == 0
+
+
+# Chunk B review round 1, Critical: the wrapper is the FIRST joint, so a DONE note whose own
+# text says `record: ` (this plan's Step 4 and Step 5 notes do) survives a block and a resume
+# whole, and a set that carries a record refuses a note of its own that holds the joint
+JOINTED = f"reads the record: body; record: carried by a block; {RECORD_CLAUSE}"
+
+
+def test_set_status_keeps_a_record_whose_text_contains_the_joint_byte_for_byte():
+    plan = CANON.replace("Status: DONE (42 tests green, abc1234)", f"Status: DONE ({JOINTED})", 1)
+    blocked = next_plan.set_status_bytes(plan.encode(), 1, "blocked-apparatus", "COMMIT APPARATUS")
+    assert f"Status: BLOCKED (apparatus: COMMIT APPARATUS; record: {JOINTED})\n" in blocked.decode()
+    resumed = next_plan.set_status_bytes(blocked, 1, "in-progress", "").decode()
+    assert f"Status: IN PROGRESS (record: {JOINTED})\n" in resumed
+    assert next_plan.carried_record(next_plan.parse_plan(resumed).steps[0]) == JOINTED
+
+
+def test_set_status_refuses_a_carried_note_that_contains_the_joint():
+    """With a record to carry the joint is the wrapper's alone; with none the words are free."""
+    stale = "the record: is stale"
+    with pytest.raises(SystemExit, match=r'^SET REFUSED step 1: the note carries "record: "'):
+        next_plan.set_status_bytes(RECORDED.encode(), 1, "blocked-apparatus", stale)
+    out = next_plan.set_status_bytes(CANON.encode(), 1, "blocked-apparatus", stale)
+    assert "Status: BLOCKED (apparatus: the record: is stale)\n" in out.decode()
+
+
+def test_parse_status_reads_the_in_progress_parenthetical_like_the_other_states():
+    assert next_plan._parse_status(" IN PROGRESS (record: x)") == ("IN PROGRESS", "record: x")
+    assert next_plan._parse_status(" IN PROGRESS") == ("IN PROGRESS", "")
+
+
+def test_validate_accepts_a_blocked_note_that_carries_a_record():
+    out = next_plan.set_status_bytes(RECORDED.encode(), 1, "blocked-apparatus", "why").decode()
+    assert next_plan.validate_text(out) == []
+
+
 def test_append_findings_replaces_none(tmp_path):
     p = write(tmp_path, CANON)
     note = tmp_path / "f.txt"
@@ -619,6 +707,104 @@ def test_migrate_refuses_a_plan_already_in_the_grammar(tmp_path):
     assert len(r.stderr.strip().splitlines()) == 1
     assert p.read_bytes() == before
     assert not (tmp_path / "prompt_plan.md.bak").exists()
+
+
+# 3.5.11 spec R3 (ryanmat/adw#8): a near-miss section header (first word Decisions or Findings,
+# text not the header) is named by validate at its line and renamed by migrate. The fixtures
+# survive the curate token map (`Decisions` -> `Decisions`) as near misses in both trees.
+NEAR_DECISIONS = CANON.replace("## Decisions", "## Decisions open", 1)
+NEAR_FINDINGS = CANON.replace("## Findings", "## Findings so far", 1)
+
+
+def test_validate_names_a_near_miss_decisions_header_at_its_line(tmp_path):
+    p = write(tmp_path, NEAR_DECISIONS)
+    line = NEAR_DECISIONS.splitlines().index("## Decisions open") + 1
+    r = run_cli("validate", str(p))
+    assert r.returncode == 2
+    assert r.stderr.strip() == (
+        f"{p}:{line}: missing section: {next_plan.DECISIONS_HEADER!r} "
+        f"(found '## Decisions open' at line {line}; rename it)"
+    )
+
+
+def test_validate_names_a_near_miss_findings_header_at_its_line():
+    line = NEAR_FINDINGS.splitlines().index("## Findings so far") + 1
+    assert next_plan.validate_text(NEAR_FINDINGS) == [
+        (
+            line,
+            f"missing section: {next_plan.FINDINGS_HEADER!r} "
+            f"(found '## Findings so far' at line {line}; rename it)",
+        )
+    ]
+
+
+def test_validate_does_not_read_a_header_with_another_first_word_as_a_near_miss():
+    text = CANON.replace("## Decisions", "## Open Decisions", 1)
+    assert next_plan.validate_text(text) == [
+        (len(text.splitlines()), f"missing section: {next_plan.DECISIONS_HEADER!r}")
+    ]
+
+
+def test_migrate_renames_a_near_miss_header_and_the_result_validates(tmp_path):
+    p = write(tmp_path, NEAR_DECISIONS)
+    before = p.read_bytes()
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 0, r.stderr
+    bak = tmp_path / "prompt_plan.md.bak"
+    assert r.stdout.strip() == (
+        f"migrated {p}: renamed '## Decisions open' to {next_plan.DECISIONS_HEADER!r} "
+        f"(backup at {bak})"
+    )
+    assert bak.read_bytes() == before
+    assert p.read_text() == CANON
+    assert run_cli("validate", str(p)).returncode == 0
+
+
+def test_migrate_renames_both_near_misses_one_line_each(tmp_path):
+    p = write(tmp_path, NEAR_DECISIONS.replace("## Findings", "## Findings so far", 1))
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 0, r.stderr
+    assert len(r.stdout.strip().splitlines()) == 2
+    assert p.read_text() == CANON
+
+
+# Chunk C review round 1 Important: migrate renames the near miss of an absent section alone,
+# the one validate names, never a near miss beside the section's own header (which would write
+# the header twice) and only the first of two near misses of one absent header
+def test_migrate_refuses_a_near_miss_beside_the_sections_own_header(tmp_path):
+    text = CANON.replace("## Findings\n", "## Findings so far\n(prose)\n\n## Findings\n", 1)
+    p = write(tmp_path, text)
+    before = p.read_bytes()
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 2
+    assert "already in the plan grammar" in r.stderr
+    assert p.read_bytes() == before
+    assert not (tmp_path / "prompt_plan.md.bak").exists()
+    assert next_plan.validate_text(text) == []
+
+
+def test_migrate_renames_the_first_of_two_near_misses_of_one_absent_header(tmp_path):
+    second = "## Decisions, more\n(prose)\n\n## Findings\n"
+    p = write(tmp_path, NEAR_DECISIONS.replace("## Findings\n", second, 1))
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 0, r.stderr
+    assert len(r.stdout.strip().splitlines()) == 1
+    renamed = p.read_text()
+    # whole lines, not substrings: the public tree's header is a prefix of the second near miss
+    assert renamed.splitlines().count(next_plan.DECISIONS_HEADER) == 1
+    assert "## Decisions, more" in renamed
+
+
+def test_validate_reports_both_missing_sections_at_the_last_line_with_no_near_miss():
+    """Chunk C review round 1 Minor: with both trailing sections missing and no near miss, the
+    two last-line reasons stand as before R3."""
+    text = CANON.replace("## Decisions", "## Open Decisions", 1)
+    text = text.replace("## Findings", "## Open Findings", 1)
+    n = len(text.splitlines())
+    assert next_plan.validate_text(text) == [
+        (n, f"missing section: {next_plan.DECISIONS_HEADER!r}"),
+        (n, f"missing section: {next_plan.FINDINGS_HEADER!r}"),
+    ]
 
 
 def test_migrate_refuses_its_own_output(tmp_path):
