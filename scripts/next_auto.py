@@ -608,7 +608,9 @@ def write_result(
 def mutation_value(plan: next_plan.Plan, n: int) -> str:
     """step.done's `mutation` (ai-dlc-record R3), from the step as the plan stands: `n/a` when
     its Mutation line says n/a, `reported` when its Status note says `mutation killed`, and
-    `missing` otherwise, since the check is run by hand and leaves no machine record."""
+    `missing` otherwise, since the check is run by hand and leaves no machine record. A
+    comment-only fix round's commit records `n/a` from its result file instead (record_step,
+    3.5.11 spec R1)."""
     step = next((s for s in plan.steps if s.number == n), None)
     if step is not None and step.mutation.startswith("n/a"):
         return "n/a"
@@ -640,7 +642,10 @@ def record_step(
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
         result["sha"] = sha
-        result["mutation"] = mutation_value(plan, n)
+        # a comment-only fix round changed no behaviour, so it had no mutant to run (3.5.11 R1);
+        # the one reason set N done exempts, so the two never disagree
+        comment_only = result.get("red_reason") == COMMENT_ONLY_ROUND
+        result["mutation"] = "n/a" if comment_only else mutation_value(plan, n)
         result["plan"] = next_plan.plan_hash(plan_text)
         if key is not None:
             result["runkey"] = key
@@ -1476,27 +1481,26 @@ def records_gap(note: str, n: int) -> bool:
 
 MUTATION_CLAIM_RE = re.compile(r"\bmutation killed\b")
 
-# the clause `evidence_clause` writes, as a DONE step's Status carries it (3.5.10 spec R11): a
-# step whose note holds one is a committed step, and a second `set N done` on it is a fix round
-EVIDENCE_CLAUSE_RE = re.compile(
-    r"check: \d+ passed of \d+ collected at base [0-9a-fA-F]{8}, lint \S+, red \S+"
-)
-
-
-def mutation_claim_conflict(step: next_plan.Step, note: str) -> str | None:
+def mutation_claim_conflict(
+    step: next_plan.Step, note: str, *, comment_only: bool = False
+) -> str | None:
     """The refusal line when the note's mutation claim disagrees with the step's `Mutation:`
     header (done-note counts spec, Requirement 5), else None: the words `mutation killed` on
-    an n/a step, or their absence on a required one."""
+    an n/a step, or their absence on a required one. `comment_only` is the step's result file
+    saying the round proved no red because it changed comments and documentation alone
+    (3.5.11 spec R1): such a round has no mutant to run, so a required step's missing words are
+    not refused; the n/a refusal holds whatever the round."""
     claims = MUTATION_CLAIM_RE.search(note) is not None
     if step.mutation.startswith("n/a") and claims:
         return (
             f"SET REFUSED step {step.number}: Mutation: n/a step claims a mutation kill; "
             "change the header line before the check"
         )
-    if step.mutation == "required" and not claims:
+    if step.mutation == "required" and not claims and not comment_only:
         return (
             f"SET REFUSED step {step.number}: Mutation: required step lacks the words "
-            "mutation killed; change the header line or run the check"
+            "mutation killed; run the step's mutation controls (on a fix round, re-run them "
+            "against the fixed tests) or change the header line"
         )
     return None
 
@@ -1506,60 +1510,71 @@ RUN_NO_RESULT_REFUSAL = (
 )
 
 
+def _fix_round_note(current: str, typed: str, clause: str) -> str:
+    """The note `set N done` writes, from the step's current record (the `DONE` note that
+    carries an evidence clause, else empty), the typed part of the note and the result file's
+    clause (3.5.10 spec R11, invariant I5). With no record, the typed note followed by the
+    clause, or the clause alone when nothing was typed. A clause the record already ends with
+    is the same round: the typed note replaces that round's note, the whole note on a
+    one-clause step and the last entry after `; fix round: ` otherwise. Any other clause is a
+    fix round, appended after the record as `; fix round: <typed>; <clause>`, so the record
+    stays byte for byte and the same call again changes nothing."""
+    if next_plan.EVIDENCE_CLAUSE_RE.search(current):
+        if current.endswith(clause):
+            cut = current.rfind("; fix round: ")
+            head = current[:cut] if cut != -1 else ""
+            entry = f"fix round: {typed}; {clause}" if head else f"{typed}; {clause}"
+            return f"{head}; {entry}" if head else entry
+        return f"{current}; fix round: {typed}; {clause}"
+    return f"{typed}; {clause}" if typed else clause
+
+
 def set_done_from_record(
     plan_path: Path, result_path: Path, n: int, note: str, *, in_run: bool = False
 ) -> tuple[int, str]:
     """`set N done` for either mode: refuse a note whose mutation claim disagrees with the
     step's header; with a result file, refuse one a commit already used (it carries `sha`),
-    then decide idempotence (a note that already ends with the file's clause gets no second
-    one) and scan the typed part of the note alone for suite numbers that disagree with the
-    file, so the clause's own text, an external last line included, is never judged; with no
-    result file, refuse unless the note records the gap and why, and in a run refuse outright,
-    since `gate K` writes the file on every pass. On a step already `DONE` whose Status carries
-    an evidence clause (3.5.10 spec R11, invariant I5): the plan's own note passed back is judged
-    by nothing and changes nothing; a result whose clause the Status already ends with is the
-    same round, and the typed note replaces that round's note (the whole Status on a one-clause
-    step, the last fix round entry otherwise); a new clause is a fix round, appended after the
-    step's record as `; fix round: <typed>; <clause>`, so the same call again changes nothing.
-    Then write the plan's Status line. Returns (exit code, one line): 1 for a refusal, 2 when the
-    result file does not parse; neither writes the plan."""
+    then scan the typed part of the note alone for suite numbers that disagree with the file,
+    so the clause's own text, an external last line included, is never judged, and write the
+    note `_fix_round_note` decides from the step's record; the plan's own note passed back is
+    judged by nothing and changes nothing. With no result file, refuse unless the note records
+    the gap and why, and in a run refuse outright, since `gate K` writes the file on every
+    pass. Then write the plan's Status line. Returns (exit code, one line): 1 for a refusal, 2
+    when the result file does not parse; neither writes the plan."""
     data = plan_path.read_bytes()
     plan = next_plan.parse_plan(data.decode("utf-8"))
     step = next((s for s in plan.steps if s.number == n), None)
-    if step is not None:
-        conflict = mutation_claim_conflict(step, note)
-        if conflict is not None:
-            return 1, conflict
+    result = None
     if result_path.is_file():
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             return 2, f"SET APPARATUS step {n}: result file unreadable: {exc}"
+    # the file is read first so a comment-only fix round's reason can exempt the claim
+    comment_only = result is not None and result.get("red_reason") == COMMENT_ONLY_ROUND
+    if step is not None:
+        conflict = mutation_claim_conflict(step, note, comment_only=comment_only)
+        if conflict is not None:
+            return 1, conflict
+    if result is not None:
         if result.get("sha"):
             return 1, (
                 f"SET REFUSED step {n}: the result file was used by commit "
                 f"{str(result['sha'])[:8]}; run check {n} again"
             )
         clause = evidence_clause(result)
-        current = step.note if step is not None and step.state == "DONE" else ""
-        if current and note == current:
+        own = step.note if step is not None and step.state == "DONE" else ""
+        # the step's build record, from its DONE note or carried through a block, a failure or
+        # a resume as `record: <note>` (3.5.11 spec R2); the written Status drops the wrapper
+        current = next_plan.carried_record(step) if step is not None else ""
+        if own and note == own:
             pass  # the plan's own note passed back: nothing typed, nothing to judge or write
         else:
             typed = note[: -len(clause)].rstrip("; ") if note.endswith(clause) else note
             conflict = note_conflicts(typed, result, n)
             if conflict is not None:
                 return 1, conflict
-            if EVIDENCE_CLAUSE_RE.search(current):
-                if current.endswith(clause):
-                    # the same round: the typed note replaces this round's note alone
-                    cut = current.rfind("; fix round: ")
-                    head = current[:cut] if cut != -1 else ""
-                    entry = f"fix round: {typed}; {clause}" if head else f"{typed}; {clause}"
-                    note = f"{head}; {entry}" if head else entry
-                else:
-                    note = f"{current}; fix round: {typed}; {clause}"
-            elif typed is note:
-                note = f"{note}; {clause}" if note else clause
+            note = _fix_round_note(current, typed, clause)
     elif in_run:
         return 1, RUN_NO_RESULT_REFUSAL.format(n=n)
     elif not records_gap(note, n):
@@ -1685,7 +1700,10 @@ def check_step(root: Path, n: int) -> tuple[int, list[str]]:
                 reasons.append(f"external Test failed: {last}")
             rc, out = run_check(root, test_cmd)
             command = shlex.join(rec["external_test_cmd"])
-            log_path.write_text(f"external Test: {command} exit {code}\n{out}", encoding="utf-8")
+            log_path.write_text(
+                f"external Test: {command} exit {code}\n{_stamped(root, n, rec, rc, out)}",
+                encoding="utf-8",
+            )
             if rc != 0:
                 reasons.append(f"tests failed: {_last_line(out)}")
         else:
@@ -1707,7 +1725,7 @@ def check_step(root: Path, n: int) -> tuple[int, list[str]]:
             if reason:
                 reasons.append(reason)
             rc, out = run_check(root, test_cmd)
-            log_path.write_text(out, encoding="utf-8")
+            log_path.write_text(_stamped(root, n, rec, rc, out), encoding="utf-8")
             if rc != 0:
                 reasons.append(f"tests failed: {_last_line(out)}")
             floor = count_floor(
@@ -1754,6 +1772,21 @@ def check_step(root: Path, n: int) -> tuple[int, list[str]]:
     rec["passed_tree"] = checked
     rec_path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
     return 0, [f"CHECK PASS step {n}"]
+
+
+def _stamped(root: Path, n: int, rec: dict, rc: int, out: str) -> str:
+    """The Test output followed by one stamp line (3.5.11 spec R7), so a reader of check-N.log
+    can tell which HEAD and base it measured, how the Test exited and what it counted:
+    `# check N: HEAD <sha40>, base <sha40>, Test exit <rc>, <passed> passed of <collected>
+    collected, <UTC time to the second>`."""
+    head = git(root, "rev-parse", "HEAD").stdout.strip()
+    passed, collected, _skipped, _xfailed = summary_counts(out)
+    when = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = (
+        f"# check {n}: HEAD {head}, base {rec['base_head']}, Test exit {rc}, "
+        f"{passed} passed of {collected} collected, {when}"
+    )
+    return f"{out.rstrip(chr(10))}\n{stamp}\n"
 
 
 def _check_record_since_begin(root: Path, rec: dict, n: int) -> str | None:

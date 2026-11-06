@@ -199,7 +199,11 @@ def _parse_status(value: str) -> tuple[str, str]:
     """Return (state, note). First token(s) are the state; note is the parenthetical body."""
     v = value.strip()
     if v.startswith("IN PROGRESS"):
-        return "IN PROGRESS", v[len("IN PROGRESS") :].strip()
+        # a parenthetical is the note, as for the other states (a carried record, 3.5.11 R2);
+        # any other remainder stays as it was read
+        rest = v[len("IN PROGRESS") :].strip()
+        m = re.match(r"^\((.*)\)\s*$", rest, re.S)
+        return "IN PROGRESS", m.group(1) if m else rest
     for st in ("PENDING", "DONE", "FAILED", "BLOCKED"):
         if v == st or v.startswith(st + " ") or v.startswith(st + "("):
             rest = v[len(st) :].strip()
@@ -378,6 +382,48 @@ def validate_warnings(text: str) -> list[tuple[int, str]]:
                 )
                 warnings.append((step.header_line, msg))
     return warnings
+
+
+# an H2 whose first word is Decisions or Findings: the header, or a near miss of it
+_NEAR_MISS_RE = re.compile(r"^## (Decisions|Findings)(?![A-Za-z0-9_-])")
+
+
+def near_miss_headers(lines: list[str]) -> list[tuple[int, str, str]]:
+    """Each H2 whose first word after `## ` is Decisions or Findings and whose text is not the
+    header it stands for (3.5.11 spec R3, ryanmat/adw#8): a hand-written `## Decisions open`,
+    or the other tree's form of the header. Returns (1-based line, the text found, the header)
+    in document order."""
+    out: list[tuple[int, str, str]] = []
+    for i, ln in enumerate(lines, 1):
+        text = ln.rstrip()
+        m = _NEAR_MISS_RE.match(text)
+        if m is None:
+            continue
+        header = DECISIONS_HEADER if m.group(1) == "Decisions" else FINDINGS_HEADER
+        if text != header:
+            out.append((i, text, header))
+    return out
+
+
+def missing_near_misses(text: str) -> list[tuple[int, str, str]]:
+    """The near miss validate names and migrate renames: the first near miss of each trailing
+    section the plan lacks, in document order. A section whose header is present keeps every
+    near miss of it as the prose it is, so migrate never writes a second header, and a second
+    near miss of one absent header is left for the operator."""
+    plan = parse_plan(text)
+    absent = {
+        header
+        for present, header in (
+            (plan.has_decisions, DECISIONS_HEADER),
+            (plan.has_findings, FINDINGS_HEADER),
+        )
+        if not present
+    }
+    out: list[tuple[int, str, str]] = []
+    for ln, found, header in near_miss_headers(text.splitlines()):
+        if header in absent and all(h != header for _l, _f, h in out):
+            out.append((ln, found, header))
+    return out
 
 
 def validate_text(text: str) -> list[tuple[int, str]]:
@@ -600,11 +646,20 @@ def validate_text(text: str) -> list[tuple[int, str]]:
             if n > CHUNK_CAP:
                 reasons.append((ln, f"{chunk} holds {n} steps; the cap is {CHUNK_CAP}"))
 
-    # trailing sections
-    if not plan.has_decisions:
-        reasons.append((len(lines), f"missing section: {DECISIONS_HEADER!r}"))
-    if not plan.has_findings:
-        reasons.append((len(lines), f"missing section: {FINDINGS_HEADER!r}"))
+    # trailing sections; a near miss of the header is named at its own line, so the one-line
+    # fix is in the reason (3.5.11 spec R3), else the section is missing at the end
+    misses = {header: (ln, found) for ln, found, header in missing_near_misses(text)}
+    sections = ((plan.has_decisions, DECISIONS_HEADER), (plan.has_findings, FINDINGS_HEADER))
+    for present, header in sections:
+        if present:
+            continue
+        if header in misses:
+            ln, found = misses[header]
+            reasons.append(
+                (ln, f"missing section: {header!r} (found {found!r} at line {ln}; rename it)")
+            )
+        else:
+            reasons.append((len(lines), f"missing section: {header!r}"))
 
     reasons.sort(key=lambda r: r[0])
     return reasons
@@ -919,21 +974,57 @@ def _newline_of(line: bytes) -> bytes:
     return b""
 
 
+# the clause `evidence_clause` writes, as a DONE step's Status carries it (3.5.10 spec R11): a
+# step whose note holds one is a committed step, and a second `set N done` on it is a fix round
+EVIDENCE_CLAUSE_RE = re.compile(
+    r"check: \d+ passed of \d+ collected at base [0-9a-fA-F]{8}, lint \S+, red \S+"
+)
+RECORD_JOINT = "record: "
+
+
+def carried_record(step: Step) -> str:
+    """The build record a step's Status carries (3.5.11 spec R2), else empty: the whole note of
+    a DONE step whose note holds an evidence clause, or, on any other state, the text after the
+    first joint when that text holds one: `record: ` opening the note (the unwrapped states) or
+    `; record: ` after the state's own note. The record's own text may say `record: ` (a DONE
+    note is free prose), so the first joint is the wrapper's, and set_status_bytes refuses a
+    state note of its own that holds the joint while a record is carried."""
+    if step.state == "DONE":
+        return step.note if EVIDENCE_CLAUSE_RE.search(step.note) else ""
+    if step.note.startswith(RECORD_JOINT):
+        record = step.note[len(RECORD_JOINT) :]
+    else:
+        cut = step.note.find(f"; {RECORD_JOINT}")
+        if cut == -1:
+            return ""
+        record = step.note[cut + len(f"; {RECORD_JOINT}") :]
+    return record if EVIDENCE_CLAUSE_RE.search(record) else ""
+
+
 def set_status_bytes(data: bytes, n: int, cli_state: str, note: str) -> bytes:
     if cli_state not in CLI_STATES:
         raise SystemExit(f"unknown state {cli_state!r}; one of {', '.join(CLI_STATES)}")
     state, wrapper = CLI_STATES[cli_state]
-    if wrapper is not None:
-        body = wrapper.format(note=note)
-        status = f"Status: {state} ({body})"
-    else:
-        status = f"Status: {state}"
 
     text = data.decode("utf-8")
     plan = parse_plan(text)
     step = next((s for s in plan.steps if s.number == n), None)
     if step is None:
         raise SystemExit(f"no step {n} in plan")
+
+    # a set to any state but done keeps the step's build record after the state's own note
+    # (3.5.11 spec R2); `done` is written whole by set N done, record and fix rounds included
+    record = carried_record(step) if state != "DONE" else ""
+    body = wrapper.format(note=note) if wrapper is not None else ""
+    if record and RECORD_JOINT in note:
+        # the joint is the wrapper's alone while a record rides, so the first one is always it
+        raise SystemExit(
+            f'SET REFUSED step {n}: the note carries "{RECORD_JOINT.strip()} ", the joint the '
+            "Status keeps the build record behind; reword it"
+        )
+    if record:
+        body = f"{body}; {RECORD_JOINT}{record}" if body else f"{RECORD_JOINT}{record}"
+    status = f"Status: {state} ({body})" if body or wrapper is not None else f"Status: {state}"
 
     lines = _split_keepends(data)
     if step.status_line is not None:
@@ -1192,7 +1283,9 @@ def migrate_text(text: str) -> str:
 
 # a whole-word `Step <n>` or `Steps <n>` reference: not inside a longer word, not the prefix of
 # a longer label (`Step 70`, `Step 7a`, `Step 7.1`), so a map over 7 never touches them; after
-# a plural, the numbers of a following `, <n>`, `and <n>` or `to <n>` list are references too
+# a plural, a list of `, <n>` entries closed by exactly one `and <n>` or `to <n>` is read too,
+# nothing after the closing entry, and a comma run with no closing entry contributes nothing
+# beyond the first number; _step_ref_spans holds the rule
 STEP_REF_RE = re.compile(r"(?<![A-Za-z0-9_-])(Steps?) (\d+)(?![0-9A-Za-z])(?!\.\d)")
 _STEP_LIST_RE = re.compile(r"(,\s*|\s+and\s+|\s+to\s+)(\d+)(?![0-9A-Za-z])(?!\.\d)")
 RENUMBER_SECTIONS = ("preamble", "headers", "status", "bodies", "decisions", "findings")
@@ -1443,11 +1536,25 @@ def main(argv: list[str] | None = None) -> int:
         data = plan_path.read_bytes()
         text = data.decode("utf-8")
         if in_grammar(text):
-            print(
-                f"{plan_path}: already in the plan grammar; run validate, not migrate",
-                file=sys.stderr,
-            )
-            return 2
+            # a plan in the grammar is rewritten only at the near miss of a section it lacks,
+            # the one validate names, renamed to its header with the backup a legacy migrate
+            # leaves (3.5.11 spec R3); a present header's near misses stay as the prose they are
+            misses = missing_near_misses(text)
+            if not misses:
+                print(
+                    f"{plan_path}: already in the plan grammar; run validate, not migrate",
+                    file=sys.stderr,
+                )
+                return 2
+            bak = plan_path.with_suffix(plan_path.suffix + ".bak")
+            bak.write_bytes(data)
+            lines = _split_keepends(data)
+            for ln, _found, header in misses:
+                lines[ln - 1] = header.encode("utf-8") + _newline_of(lines[ln - 1])
+            plan_path.write_bytes(b"".join(lines))
+            for _ln, found, header in misses:
+                print(f"migrated {plan_path}: renamed {found!r} to {header!r} (backup at {bak})")
+            return 0
         bak = plan_path.with_suffix(plan_path.suffix + ".bak")
         bak.write_bytes(data)
         migrated = migrate_text(text)

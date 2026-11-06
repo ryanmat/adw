@@ -7487,6 +7487,90 @@ def test_set_done_takes_the_plans_own_note_back_after_a_fix_round_unchanged(tmp_
     assert _plan_hash(repo) == once
 
 
+# 3.5.11 spec R2: a block, a failure or a resume during a fix round keeps the record in the
+# Status (next_plan.carried_record), and the fix round's set N done writes it back
+FIX_LINE = (
+    f"Status: DONE (the fixture note; {FIXTURE_CLAUSE}; fix round: the fix note; {FIX_CLAUSE})"
+)
+
+
+def _set_state(repo, n, cli_state, note=""):
+    next_auto._set_plan_status(repo, "prompt_plan.md", n, cli_state, note)
+
+
+def test_set_done_writes_the_record_back_after_a_block_and_a_resume(tmp_path):
+    """The dogfood's path of 2026-11-05: blocked-apparatus during the fix round, in-progress on
+    the resume, then the fix round's set N done; the record rides through both and comes back
+    ahead of the fix round, the wrapper gone, and the same call again changes nothing."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _set_state(repo, 2, "blocked-apparatus", "COMMIT APPARATUS")
+    _set_state(repo, 2, "in-progress")
+    carried = f"Status: IN PROGRESS (record: the fixture note; {FIXTURE_CLAUSE})"
+    assert carried in (repo / "prompt_plan.md").read_text().splitlines()
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _done_line(repo) == FIX_LINE
+    once = _plan_hash(repo)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _plan_hash(repo) == once
+
+
+def test_set_done_writes_back_a_record_whose_text_contains_the_joint(tmp_path):
+    """Chunk B review round 1 Critical: a first-round note that itself says `record: ` comes back
+    byte for byte ahead of the fix round after a block and a resume."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "reads the record: body; record: carried by a block") == 0
+    first = _done_line(repo)
+    _set_state(repo, 2, "blocked-apparatus", "COMMIT APPARATUS")
+    _set_state(repo, 2, "in-progress")
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _done_line(repo) == f"{first[:-1]}; fix round: the fix note; {FIX_CLAUSE})"
+
+
+def test_set_done_writes_the_record_back_after_a_block_alone(tmp_path):
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _set_state(repo, 2, "blocked-apparatus", "COMMIT APPARATUS")
+    _write_result(repo, FIX_RESULT)
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    assert _done_line(repo) == FIX_LINE
+
+
+def test_set_done_after_a_block_against_the_same_record_replaces_the_round(tmp_path):
+    """Chunk B review round 1 Minor (spec R2's same-round branch through a carried record): a
+    block before commit N and then set N done against the unused result file whose clause the
+    record already ends with replaces that round's note, the wrapper gone, and adds no round."""
+    repo = _with_result(tmp_path)
+    assert _set_done(repo, tmp_path, "the fixture note") == 0
+    _set_state(repo, 2, "blocked-apparatus", "COMMIT APPARATUS")
+    assert _set_done(repo, tmp_path, "the corrected fixture note") == 0
+    assert _done_line(repo) == f"Status: DONE (the corrected fixture note; {FIXTURE_CLAUSE})"
+
+
+def test_set_done_in_a_run_writes_the_record_back_after_step_begin_on_a_done_step(tmp_path):
+    """The auto path: step-begin K on the step the run just committed sets in-progress on the
+    worktree plan (next_auto.py step_begin), and set K done through set_done_run carries the
+    record into the fix round's line."""
+    repo, _ = make_repo(tmp_path)
+    state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
+    wt = Path(state["worktree"])
+    result = next_auto.run_result_path(state, 2)
+    result.write_text(json.dumps(dict(RESULT_FIXTURE, mode="auto"), indent=2))
+    assert _set_done(repo, tmp_path, "the run note") == 0
+    next_auto._set_plan_status(wt, "prompt_plan.md", 2, "in-progress")
+    lines = (wt / "prompt_plan.md").read_text().splitlines()
+    assert f"Status: IN PROGRESS (record: the run note; {FIXTURE_CLAUSE})" in lines
+    result.write_text(json.dumps(dict(FIX_RESULT, mode="auto"), indent=2))
+    assert _set_done(repo, tmp_path, "the fix note") == 0
+    lines = (wt / "prompt_plan.md").read_text().splitlines()
+    assert (
+        f"Status: DONE (the run note; {FIXTURE_CLAUSE}; fix round: the fix note; {FIX_CLAUSE})"
+        in lines
+    )
+
+
 def test_set_done_replaces_the_status_when_the_step_is_not_done_or_has_no_clause(tmp_path):
     """A step not yet `DONE`, and a `DONE` step whose Status carries no evidence clause (a
     `no check N: <why>` note), are written as before: the note replaces the Status."""
@@ -7510,6 +7594,45 @@ def test_set_done_fix_round_refuses_a_second_note_whose_count_disagrees(tmp_path
     err = _refused(repo, tmp_path, "the fix note, 2150 passed", capsys)
     assert err == "SET REFUSED step 2: the note says 2150 passed, the check record says 2162\n"
     assert _done_line(repo) == f"Status: DONE (the fixture note; {FIXTURE_CLAUSE})"
+
+
+# 3.5.11 spec R7: the note `set N done` writes, as one pure function over the current Status
+# note, the typed note and the result file's clause; every expected string is the assertion of
+# a `set N done` case above (read 2026-11-05 at 84ec0ed)
+@pytest.mark.parametrize(
+    ("current", "typed", "clause", "expected"),
+    [
+        ("", "the fixture note", FIXTURE_CLAUSE, f"the fixture note; {FIXTURE_CLAUSE}"),
+        (
+            f"the fixture note; {FIXTURE_CLAUSE}",
+            "the fix note",
+            FIX_CLAUSE,
+            f"the fixture note; {FIXTURE_CLAUSE}; fix round: the fix note; {FIX_CLAUSE}",
+        ),
+        (
+            f"the fixture note; {FIXTURE_CLAUSE}",
+            "the corrected fixture note",
+            FIXTURE_CLAUSE,
+            f"the corrected fixture note; {FIXTURE_CLAUSE}",
+        ),
+        (
+            f"the fixture note; {FIXTURE_CLAUSE}; fix round: the fix note; {FIX_CLAUSE}",
+            "the corrected fix note",
+            FIX_CLAUSE,
+            f"the fixture note; {FIXTURE_CLAUSE}; fix round: the corrected fix note; {FIX_CLAUSE}",
+        ),
+        ("", "", FIXTURE_CLAUSE, FIXTURE_CLAUSE),
+    ],
+    ids=["first-set", "fix-round", "same-round-one-clause", "same-round-last-entry", "empty-note"],
+)
+def test_fix_round_note_decides_the_written_note_from_the_record_the_typed_note_and_the_clause(
+    current, typed, clause, expected
+):
+    """The first set appends the clause; a new clause on a record is a fix round appended after
+    it; a clause the record already ends with is the same round, whose typed note replaces the
+    whole note on a one-clause step and the last entry after `; fix round: ` otherwise; an empty
+    typed note gives the clause alone."""
+    assert next_auto._fix_round_note(current, typed, clause) == expected
 
 
 def test_set_done_names_the_external_test_when_red_is_external(tmp_path):
@@ -7662,14 +7785,72 @@ def test_set_done_refuses_a_mutation_required_step_whose_note_lacks_the_words(tm
     # the fixture plan's Step 1 header is `Mutation: required`
     repo = _with_result(tmp_path, dict(RESULT_FIXTURE, step=1, mutation="reported"), step=1)
     err = _refused(repo, tmp_path, "the fixture note, both mutants red", capsys, n=1)
-    assert err == (
-        "SET REFUSED step 1: Mutation: required step lacks the words mutation killed; "
-        "change the header line or run the check\n"
-    )
+    assert err == REQUIRED_REFUSAL
     assert _set_done(repo, tmp_path, "the fixture note, mutation killed both ways", n=1) == 0
     assert _done_line(repo) == (
         f"Status: DONE (the fixture note, mutation killed both ways; {FIXTURE_CLAUSE})"
     )
+
+
+# 3.5.11 spec R1 (ryanmat/adw#7): the refusal names the way through, and a comment-only fix
+# round, which check N records with red n/a and this reason (next_auto.py COMMENT_ONLY_ROUND,
+# read 2026-11-05 at 84ec0ed), is exempt from it
+REQUIRED_REFUSAL = (
+    "SET REFUSED step 1: Mutation: required step lacks the words mutation killed; run the "
+    "step's mutation controls (on a fix round, re-run them against the fixed tests) or change "
+    "the header line\n"
+)
+COMMENT_ONLY_RESULT = dict(RESULT_FIXTURE, step=1, red="n/a", red_reason="comment-only fix round")
+COMMENT_ONLY_CLAUSE = "check: 2150 passed of 2151 collected at base 24bc2b74, lint ok, red n/a"
+
+
+def test_set_done_exempts_a_comment_only_fix_round_from_the_mutation_claim(tmp_path):
+    """On the fixture plan's Mutation: required step, a result file carrying red_reason
+    `comment-only fix round` lets a note without the words through, clause appended."""
+    repo = _with_result(tmp_path, COMMENT_ONLY_RESULT, step=1)
+    assert _set_done(repo, tmp_path, "traceability tags on the scratch tests", n=1) == 0
+    assert _done_line(repo) == (
+        f"Status: DONE (traceability tags on the scratch tests; {COMMENT_ONLY_CLAUSE})"
+    )
+
+
+def test_set_done_still_refuses_a_kill_claimed_on_an_n_a_step_in_a_comment_only_round(
+    tmp_path, capsys
+):
+    repo = _with_result(tmp_path, dict(COMMENT_ONLY_RESULT, step=2), step=2)
+    err = _refused(repo, tmp_path, "the fixture note, mutation killed", capsys)
+    assert err == (
+        "SET REFUSED step 2: Mutation: n/a step claims a mutation kill; "
+        "change the header line before the check\n"
+    )
+
+
+def test_set_done_refuses_a_required_step_without_the_words_when_no_result_file_exempts_it(
+    tmp_path, capsys
+):
+    """No result file at all: the mutation claim is judged first, as before, with the new line."""
+    repo = _with_result(tmp_path, result=None, step=1)
+    assert _refused(repo, tmp_path, "the fixture note, both mutants red", capsys, n=1) == (
+        REQUIRED_REFUSAL
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "value"), [("comment-only fix round", "n/a"), ("another reason", "missing")]
+)
+def test_record_step_writes_mutation_n_a_for_a_comment_only_fix_round(tmp_path, reason, value):
+    """commit N's record of a comment-only fix round says n/a, not missing: the round changed
+    no behaviour, so there was no mutant to run (spec R1). The one reason set N done exempts
+    is the one the record reads (Chunk A review Minor); any other reason reads the plan."""
+    repo, _ = make_repo(tmp_path)
+    path = attended_result(repo, 1)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(COMMENT_ONLY_RESULT, red_reason=reason)))
+    plan_text = (repo / "prompt_plan.md").read_text()
+    plan = next_plan.parse_plan(plan_text)
+    sha = "0" * 40
+    assert next_auto.record_step(repo, repo, plan, 1, sha, path, None, plan_text=plan_text) is None
+    assert json.loads(path.read_text())["mutation"] == value
 
 
 def test_set_done_in_a_run_appends_the_clause_to_the_worktree_plan_and_refuses_conflicts(
@@ -8424,6 +8605,24 @@ def test_check_passes_a_comment_only_fix_round_with_red_n_a(tmp_path, capsys):
     result = json.loads(attended_result(repo).read_text(encoding="utf-8"))
     assert (result["red"], result["red_reason"]) == COMMENT_ROUND
     assert (result["passed"], result["collected"], result["lint"]) == (2, 2, "ok")
+
+
+def test_commit_records_mutation_n_a_for_a_comment_only_fix_round_through_the_engine(
+    tmp_path, capsys
+):
+    """Chunk A review round 1 Minor (3.5.11 spec R1 through the attended path): after a passing
+    comment-only check, `set 1 done` takes a note without the mutation words and `commit 1`
+    records `mutation: n/a` from the result file's reason."""
+    repo = _attended_fix_round(tmp_path)
+    _comment_round(repo)
+    assert next_auto.check_step(repo, 1) == (0, ["CHECK PASS step 1"])
+    note = tmp_path / "fix-note.txt"
+    note.write_text("the comment and the page, no behaviour changed")
+    assert next_auto.main(["--root", str(repo), "set", "1", "done", "--note-file", str(note)]) == 0
+    assert next_auto.main(["--root", str(repo), "commit", "1"]) == 0
+    result = json.loads(attended_result(repo).read_text(encoding="utf-8"))
+    assert (result["red_reason"], result["mutation"]) == ("comment-only fix round", "n/a")
+    assert capsys.readouterr().err == ""
 
 
 def test_check_refuses_the_same_staging_on_a_first_round(tmp_path):
@@ -9779,6 +9978,46 @@ def test_f591_the_next_check_begin_removes_the_log(tmp_path, n):
     rc, line = next_auto.check_begin(repo, n, test_cmd=TEST_CMD, lint_cmd=LINT_OK)
     assert rc == 0, line
     assert not check_log(repo).exists()
+
+
+# 3.5.11 spec R7: the log ends with one stamp line naming the HEAD and base it measured, the
+# Test exit and the counts, so a reader of check-N.log can tell which tree it records
+CHECK_STAMP_RE = re.compile(
+    r"^# check 1: HEAD ([0-9a-f]{40}), base ([0-9a-f]{40}), Test exit (\d+), "
+    r"(\d+) passed of (\d+) collected, \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
+)
+
+
+def _last_log_line(repo):
+    return check_log(repo).read_text().rstrip("\n").splitlines()[-1]
+
+
+def test_check_log_ends_with_a_stamp_of_head_base_exit_and_counts_on_a_pass(tmp_path):
+    """The stamp's HEAD is the repository's, its base the check record's, the exit 0 and the
+    counts the suite's (two tests in the fixture after good_step); the log still holds no
+    `failed`."""
+    repo = begun(tmp_path)
+    good_step(repo)
+    assert next_auto.check_step(repo, 1) == (0, ["CHECK PASS step 1"])
+    m = CHECK_STAMP_RE.match(_last_log_line(repo))
+    assert m, _last_log_line(repo)
+    assert m.group(1) == head_sha(repo)
+    assert m.group(2) == json.loads(attended_record(repo).read_text())["base_head"]
+    assert m.group(3, 4, 5) == ("0", "2", "2")
+    assert "failed" not in check_log(repo).read_text()
+
+
+def test_check_log_stamp_on_a_failing_check_carries_the_exit_and_the_counts(tmp_path):
+    """A red Test is stamped too: exit 1, one of two passed, with pytest's output intact
+    above it."""
+    repo = begun(tmp_path)
+    red_step(repo)
+    assert next_auto.check_step(repo, 1)[0] == 1
+    m = CHECK_STAMP_RE.match(_last_log_line(repo))
+    assert m, _last_log_line(repo)
+    assert m.group(3, 4, 5) == ("1", "1", "2")
+    text = check_log(repo).read_text()
+    assert "test_feature" in text and re.search(r"\b1 failed\b", text)
 
 
 def test_f591_an_exempt_check_logs_the_external_command_and_exit_first(tmp_path):

@@ -17,7 +17,7 @@ Nothing in the plugin is standing agent context; every piece is loaded by the pl
 Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first; a lower version prints one line and the hooks stand down, except the guard hook, which keeps its denials from 3.9), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.10
+claude plugin marketplace add ryanmat/adw@v3.5.11
 claude plugin install adw@adw --scope user
 ```
 

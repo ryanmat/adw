@@ -2,6 +2,19 @@
 
 Each entry describes one release of the plugin; a release entry lists what it removes under a bullet that begins "Removed:", one item per surface.
 
+## 3.5.11 (2026-11-06)
+
+Curated from the maintainer's development repository after the engine merge b4b84f6, plus this release's version and documentation edits.
+
+The items the 3.5.10 release left open, two of them filed as issues here:
+
+- `set N done` exempts a comment-only fix round of a `Mutation: required` step from the mutation-killed claim when the check record carries `red_reason: comment-only fix round`, and `commit N` records `mutation: n/a` for that round; the refusal on a required step names the step's mutation controls and their re-run on a fix round (#7).
+- `validate` names a near-miss trailing header in the section's place (`missing section: '## Decisions' (found '## Decisions open' at line N; rename it)`), and `migrate` renames the first near miss of each absent section with a `.bak` beside the plan, refusing one that stands beside the section's own header (#8).
+- `set N <state>` on a step with a build record keeps it in every state but done: `; record: <note>` after a wrapped state's own note, or `(record: <note>)` alone on in-progress and pending; a note that itself holds `record: ` is refused.
+- `check N` ends `check-N.log` with a stamp line naming HEAD, the base, the Test exit, the counts and the time.
+- `commands/next.md`: the mutation-check item says to delete `__pycache__` after a same-size mutant, the boundary paragraph says the `.orig.md` copy is written when the verdict filter dropped a finding, and the stop and on-red sentences say the record is kept.
+- The changelog pin in the maintainer's tests anchors at the first heading, and the step-reference grammar states its closing-word rule in its comment.
+
 ## 3.5.10 (2026-11-05)
 
 Curated from the maintainer's development repository after the engine merge da4a370, plus this release's version and documentation edits.
