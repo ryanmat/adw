@@ -3443,6 +3443,7 @@ def test_r11_verdict_writes_the_round_and_keeps_the_report_on_a_needs_fixes_roun
         "reviewer": "adw:next-reviewer",
         "model": "opus",
         "round": 1,
+        "open_minor": [],
     }
     assert (attended / f"review-{sha}-1.md").read_text() == REPORT
     assert next_auto.load_state(repo) is None
@@ -3477,6 +3478,7 @@ def test_r11_verdict_in_a_run_writes_step_and_round_named_files(tmp_path, capsys
         "reviewer": "adw:next-reviewer",
         "model": "opus",
         "round": 2,
+        "open_minor": [],
     }
     assert (run_dir / "review-1-2.md").read_text() == REPORT
     assert not (repo / ".next-auto" / "attended").exists()
@@ -5591,18 +5593,94 @@ def test_r4_pytest_a_third_party_module_is_foreign(tmp_path):
     assert "'nonexistent_pkg'" in (_unresolved(_pytest_only("test_third.py"), tmp_path, []) or "")
 
 
+def _pytest_one_miss(name, test):
+    """A pytest run whose only failure is a collection error on one bare module: the shape
+    of the dark factory's 2026-11-05 gate (run 20261105-f7688c, read on devbox 2026-11-07),
+    where the target's conftest.py puts scripts/ on sys.path and the step's test imports the
+    module it added there by its bare name."""
+    return (
+        "==================================== ERRORS ====================================\n"
+        f"______________________ ERROR collecting tests/{test} ______________________\n"
+        f"ImportError while importing test module '<root>/tests/{test}'.\n"
+        f"tests/{test}:1: in <module>\n"
+        f"    import {name}\n"
+        f"E   ModuleNotFoundError: No module named '{name}'\n"
+        "=========================== short test summary info ============================\n"
+        f"ERROR tests/{test}\n"
+        "!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n"
+        "1 error in 0.10s\n"
+    )
+
+
+def _scripts_root_tree(tmp_path):
+    """A tree whose conftest.py inserts scripts/ on sys.path, the arrangement that resolves
+    a bare name under scripts/ for pytest and that _python_roots cannot see."""
+    (tmp_path / "conftest.py").write_text(
+        "import sys\nfrom pathlib import Path\n\n"
+        'sys.path.insert(0, str(Path(__file__).parent / "scripts"))\n'
+    )
+    return tmp_path
+
+
+def test_r1_a_bare_module_is_the_steps_when_a_changed_py_carries_its_name(tmp_path):
+    """3.5.12 R1: the step adds scripts/widget.py and a test importing `widget` bare; the
+    changed .py whose stem is the name attributes the miss to the step, so the red stands."""
+    tree = _scripts_root_tree(tmp_path)
+    text = _pytest_one_miss("widget", "test_widget.py")
+    assert _unresolved(text, tree, ["scripts/widget.py", "tests/test_widget.py"]) is None
+
+
+def test_r1_a_bare_module_no_changed_py_carries_stays_foreign(tmp_path):
+    """The stem clause needs the module in the changed set: a test alone importing a name
+    the step did not add reads as foreign, as today."""
+    tree = _scripts_root_tree(tmp_path)
+    text = _pytest_one_miss("widget", "test_widget.py")
+    got = _unresolved(text, tree, ["tests/test_widget.py"])
+    assert got is not None and "'widget'" in got
+
+
+def test_r1_the_11_05_gate_text_replays_to_none(tmp_path):
+    """The 2026-11-05 APPARATUS replayed: `convert_exathlon` under scripts/ with the test
+    beside it (run 20261105-f7688c, the gate's text read on devbox 2026-11-07) is the step's."""
+    tree = _scripts_root_tree(tmp_path)
+    text = _pytest_one_miss("convert_exathlon", "test_eval_exathlon.py")
+    changed = ["scripts/convert_exathlon.py", "tests/test_eval_exathlon.py"]
+    assert _unresolved(text, tree, changed) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "changed", "own"),
+    [
+        ("pkg.widget", ["scripts/widget.py"], True),
+        ("requests", ["scripts/widget.py"], False),
+        ("widget", ["scripts/widget.md"], False),
+    ],
+    ids=["dotted-last-component", "third-party-beside-a-changed-py", "not-a-py"],
+)
+def test_r1_the_stem_clause_reads_the_last_component_of_a_py_path_only(
+    tmp_path, name, changed, own
+):
+    """A dotted name matches on its last component; a name no changed .py carries stays
+    foreign; a changed file with the stem but another suffix attributes nothing."""
+    tree = _scripts_root_tree(tmp_path)
+    got = _unresolved(_pytest_one_miss(name, "test_widget.py"), tree, changed)
+    assert (got is None) if own else (got is not None and f"'{name}'" in got)
+
+
 @pytest.mark.parametrize(
     ("added", "own"),
     [
         (["newmod.py"], True),
         (["newmod/__init__.py"], True),
         (["src/newmod.py"], True),
-        (["lib/newmod.py"], False),
+        # own since 3.5.12 R1 (I2): a changed .py whose stem is the name is the step's wherever
+        # the tree puts it; through 3.5.11 an undeclared root read as foreign
+        (["lib/newmod.py"], True),
         ([], False),
     ],
     ids=["top-level", "package", "src-layout", "other-layout", "not-added"],
 )
-def test_r3_pytest_a_dotted_name_is_the_steps_own_at_the_top_level_or_under_src(
+def test_r3_pytest_a_dotted_name_is_the_steps_own_under_src_or_when_a_changed_py_carries_it(
     tmp_path, added, own
 ):
     got = _unresolved(_pytest_only("test_own.py"), tmp_path, added)
@@ -5614,12 +5692,22 @@ def test_r3_pytest_a_dotted_name_is_the_steps_own_at_the_top_level_or_under_src(
     [
         ('pythonpath = ["scripts"]', ["scripts/newmod.py"], True),
         ('pythonpath = ["scripts", "tools"]', ["tools/newmod/__init__.py"], True),
-        ('pythonpath = ["scripts"]', ["lib/newmod.py"], False),
-        ("", ["scripts/newmod.py"], False),
+        # the two undeclared-root rows are own since 3.5.12 R1 (I2): the changed .py carries
+        # the name, so the declared roots no longer decide them; a package under an undeclared
+        # root (an __init__.py, whose stem is not the name) still reads through the roots
+        ('pythonpath = ["scripts"]', ["lib/newmod.py"], True),
+        ("", ["scripts/newmod.py"], True),
+        ("", ["lib/newmod/__init__.py"], False),
     ],
-    ids=["scripts-root", "second-root-package", "root-not-declared", "no-pythonpath"],
+    ids=[
+        "scripts-root",
+        "second-root-package",
+        "root-not-declared",
+        "no-pythonpath",
+        "undeclared-package",
+    ],
 )
-def test_r3_pytest_a_dotted_name_is_the_steps_own_under_a_declared_pythonpath_root(
+def test_r3_pytest_a_dotted_name_is_the_steps_own_under_a_declared_root_or_by_a_changed_py(
     tmp_path, pythonpath, added, own
 ):
     # the tree's pyproject declares the roots pytest imports from, as a plugin's layout does
@@ -10490,6 +10578,33 @@ def test_boundary_commit_commits_the_plan_with_the_last_done_steps_chunk(tmp_pat
     )
 
 
+def test_the_migrate_clean_up_line_leaves_the_tree_clean_when_followed_in_order(tmp_path, capsys):
+    """3.5.12 R6, the Chunk D review's Critical: boundary-commit refuses any untracked path
+    beside the plan and the record, so the printed moves run as a reader runs them, in the
+    printed order, and the tree is clean after them with the migration committed."""
+    repo, _ = make_repo(tmp_path)
+    plan = repo / "prompt_plan.md"
+    plan.write_text("# X Implementation Plan\n\n## Step 1: a [done]\nbody\n")
+    git(repo, "commit", "-qam", "legacy plan")
+    r = subprocess.run(
+        [sys.executable, next_plan.__file__, "migrate", "prompt_plan.md"],
+        capture_output=True, text=True, cwd=repo, check=True,
+    )  # fmt: skip
+    line = next(ln for ln in r.stdout.splitlines() if ln.startswith("next: "))
+    for move in line[len("next: ") :].split(" then "):
+        if move.startswith("remove "):
+            (repo / move[len("remove ") :]).unlink()
+        else:
+            assert move.startswith("python3 $AUTO boundary-commit --title "), move
+            title = move.split('--title "', 1)[1].rstrip('"')
+            rc = next_auto.main(["--root", str(repo), "boundary-commit", "--title", title])
+            assert rc == 0, capsys.readouterr().err
+    assert git(repo, "status", "--porcelain").stdout == ""
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "docs(plan): migrate into the grammar"
+    )
+
+
 def test_boundary_commit_takes_a_title_and_an_unchunked_plan_has_a_fixed_subject(
     tmp_path, capsys
 ):
@@ -10875,3 +10990,440 @@ def test_factory_stream_regex_reads_the_no_pr_line_with_an_empty_pr_group():
     assert m.group(1) == f"BLOCKED (decision) at step 1 {NO_PR_LINE}"
     m = STREAM_STOP_RE.search("RUN STOPPED completed PR #7\nhttps://x/pull/7\n")
     assert m and m.group(2) == "7" and m.group(1) == "completed"
+
+
+# ---- a commit means a wrap-up, the review optional (3.5.12 spec R2, Step 4) -------------------
+
+REVIEW_SKIPPED_LINE = "Review skipped: budget; the step is committed and gate-passed, not reviewed"
+
+
+def _one_committed_step_run(tmp_path):
+    """A run with step 1 committed (state["steps"] as commit_run writes it), step 2 still
+    PENDING and no verdict file in the run dir: the 2026-11-04 factory night at its
+    budget stop (run 20261104-563fbb, read on devbox 2026-11-07), where `commit 61` had landed
+    and the coordinator ended its turn before `review-package` and `wrap-up`."""
+    repo, origin = make_repo(tmp_path)
+    state = next_auto.start(repo, "prompt_plan.md", "main", run_id="20260911-abc123", sync=False)
+    next_auto.step_begin(repo, 1)
+    next_auto.set_step(repo, 1, "done", "a")
+    record_committed_step(repo, 1)
+    return repo, origin, state
+
+
+def _spy_save_state(monkeypatch):
+    saved = []
+    real = next_auto.save_state
+
+    def _save(state):
+        saved.append(dict(state))
+        real(state)
+
+    monkeypatch.setattr(next_auto, "save_state", _save)
+    return saved
+
+
+def test_r2_wrap_up_review_skipped_marks_the_state_title_body_and_stop_line(
+    tmp_path, monkeypatch, capsys
+):
+    repo, _origin, state = _one_committed_step_run(tmp_path)
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh_visibility(calls, private=True))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    saved = _spy_save_state(monkeypatch)
+    rc = next_auto.main(["--root", str(repo), "wrap-up", "--review-skipped", "budget"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert out.out.splitlines()[0] == (
+        "RUN STOPPED stopped after 1 of 2 steps (review skipped: budget) PR #7"
+    )
+    assert saved[-1]["review_skipped"] == "budget"
+    pr = [c for c in calls if c[:2] == ["pr", "create"]]
+    assert len(pr) == 1
+    title = pr[0][pr[0].index("--title") + 1]
+    assert title == (
+        "next-auto run 20260911-abc123: stopped after 1 of 2 steps (review skipped: budget)"
+    )
+    body = Path(pr[0][pr[0].index("--body-file") + 1]).read_text()
+    assert next(ln for ln in body.splitlines() if ln.strip()) == REVIEW_SKIPPED_LINE
+    assert "- Stop reason: stopped after 1 of 2 steps (review skipped: budget)" in body
+    pr_body = (Path(state["run_dir"]) / next_auto.PR_BODY_NAME).read_text()
+    assert next(ln for ln in pr_body.splitlines() if ln.strip()) == REVIEW_SKIPPED_LINE
+    assert next_auto.find_state_file(repo) is None
+
+
+def test_r2_wrap_up_refuses_review_skipped_when_every_committed_step_was_reviewed(
+    tmp_path, monkeypatch, capsys
+):
+    """I3: the marker cannot dress a reviewed run. Nothing happens before the refusal: no
+    plan commit, no push, no gh call, and the marker stays so the run is still live."""
+    repo, origin, state = _one_committed_step_run(tmp_path)
+    (Path(state["run_dir"]) / "verdict-1-1.json").write_text(
+        json.dumps(
+            {"head": "0" * 40, "verdict": "Approved", "reviewer": "adw:next-reviewer",
+             "model": "opus", "round": 1}
+        )
+    )
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh(calls))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    rc = next_auto.main(["--root", str(repo), "wrap-up", "--review-skipped", "budget"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == (
+        "WRAP-UP REFUSED: --review-skipped on a run whose every step was reviewed"
+    )
+    assert out.out == "" and calls == []
+    refs = subprocess.run(
+        ["git", "-C", str(origin), "for-each-ref", "refs/heads/next-auto/"],
+        capture_output=True, text=True,
+    ).stdout
+    assert refs == ""
+    assert next_auto.find_state_file(repo) is not None
+    assert not (Path(state["run_dir"]) / "summary.md").exists()
+
+
+def test_r2_wrap_up_review_skipped_takes_only_the_closed_set(tmp_path, capsys):
+    repo, _ = make_repo(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        next_auto.main(["--root", str(repo), "wrap-up", "--review-skipped", "other"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid choice: 'other'" in err
+    # argparse quotes the choices on some Python patch releases and not on others
+    # (3.14.5 on the Mac quotes them, the CI runners' builds do not), so read the words.
+    _, found, tail = err.partition("choose from")
+    assert found, err
+    words = {w.strip(" '\"") for w in tail.split(")", 1)[0].split(",")}
+    assert words == {"budget", "turns", "context"}
+
+
+def test_r2_wrap_up_without_the_flag_writes_no_marker_anywhere(tmp_path, monkeypatch, capsys):
+    repo, _origin, state = _one_committed_step_run(tmp_path)
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh_visibility(calls, private=True))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    saved = _spy_save_state(monkeypatch)
+    rc = next_auto.main(["--root", str(repo), "wrap-up"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert out.out.splitlines()[0] == "RUN STOPPED stopped after 1 of 2 steps PR #7"
+    assert "review_skipped" not in saved[-1]
+    pr = next(c for c in calls if c[:2] == ["pr", "create"])
+    title = pr[pr.index("--title") + 1]
+    assert title == "next-auto run 20260911-abc123: stopped after 1 of 2 steps"
+    body = Path(pr[pr.index("--body-file") + 1]).read_text()
+    assert body.startswith("# next-auto run 20260911-abc123\n")
+    assert "Review skipped" not in body
+    pr_body = (Path(state["run_dir"]) / next_auto.PR_BODY_NAME).read_text()
+    assert pr_body.startswith("# next-auto run 20260911-abc123\n")
+    assert "Review skipped" not in pr_body
+
+
+def test_r2_a_wrap_up_re_run_after_a_failed_push_keeps_the_marker_on_title_and_stop_line(
+    tmp_path, monkeypatch, capsys
+):
+    """The Chunk B review's Important (I3): the first wrap-up saved review_skipped and then
+    failed at the push; next.md says to fix the cause and run wrap-up again, with no flag.
+    The re-run reads the saved word, so the title, the stop line and the body agree."""
+    repo, origin, _state = _one_committed_step_run(tmp_path)
+    git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+    monkeypatch.setattr(next_auto, "gh", fake_gh([]))
+    with pytest.raises(RuntimeError, match="push"):
+        next_auto.wrap_up(repo, repo_slug="ryanmat/fixture", review_skipped="budget")
+    assert next_auto.find_state_file(repo) is not None
+    git(repo, "remote", "set-url", "origin", str(origin))
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh_visibility(calls, private=True))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    rc = next_auto.main(["--root", str(repo), "wrap-up"])
+    out = capsys.readouterr()
+    assert rc == 0, out.err
+    assert out.out.splitlines()[0] == (
+        "RUN STOPPED stopped after 1 of 2 steps (review skipped: budget) PR #7"
+    )
+    pr = next(c for c in calls if c[:2] == ["pr", "create"])
+    assert pr[pr.index("--title") + 1].endswith(" (review skipped: budget)")
+    body = Path(pr[pr.index("--body-file") + 1]).read_text()
+    assert next(ln for ln in body.splitlines() if ln.strip()) == REVIEW_SKIPPED_LINE
+    assert "- Stop reason: stopped after 1 of 2 steps (review skipped: budget)" in body
+
+
+def test_r2_wrap_up_refuses_review_skipped_on_a_run_that_committed_no_step(
+    tmp_path, monkeypatch, capsys
+):
+    """The Chunk B review's Minor: a hand-back has no step whose review could be skipped, so
+    the flag is refused there and the body never says a step is committed when none is."""
+    repo, _origin, state = _no_step_run(tmp_path)
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", fake_gh(calls))
+    monkeypatch.setattr(next_auto, "origin_repo", lambda _root: "ryanmat/fixture")
+    rc = next_auto.main(["--root", str(repo), "wrap-up", "--review-skipped", "budget"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == "WRAP-UP REFUSED: --review-skipped on a run that committed no step"
+    assert out.out == "" and calls == []
+    assert next_auto.find_state_file(repo) is not None
+    assert not (Path(state["run_dir"]) / "summary.md").exists()
+
+
+# ---- a re-review approves with Minors open (3.5.12 spec R4, Step 6) ---------------------------
+
+
+def test_r4_verdict_writes_the_open_minors_beside_the_five_keys(tmp_path, capsys):
+    """3.5.12 R4 (rul-5a7bc322a6): a re-review whose only open findings are Minors is
+    Approved, and the verdict record says which Minors were left, so the merge gate's
+    Approved reads the same and the record carries what the fix round did not touch."""
+    repo, _ = make_repo(tmp_path)
+    sha = head_sha(repo)
+    report = tmp_path / "reviewer-report.md"
+    report.write_text(REPORT)
+    rc, line = next_auto.record_verdict(
+        repo, 1, sha, 2, "Approved", report, open_minor=["src/a.py:3", "tests/test_a.py:9"]
+    )
+    assert rc == 0, line
+    verdict = json.loads((repo / ".next-auto" / "attended" / f"verdict-{sha}.json").read_text())
+    assert verdict == {
+        "head": sha,
+        "verdict": "Approved",
+        "reviewer": "adw:next-reviewer",
+        "model": "opus",
+        "round": 2,
+        "open_minor": ["src/a.py:3", "tests/test_a.py:9"],
+    }
+    argv = verdict_argv(repo, 1, sha, 2, "Approved", report)
+    argv += ["--open-minor", "src/a.py:3", "--open-minor", "tests/test_a.py:9"]
+    assert next_auto.main(argv) == 0
+    capsys.readouterr()
+    again = json.loads((repo / ".next-auto" / "attended" / f"verdict-{sha}.json").read_text())
+    assert again == verdict
+
+
+def test_r4_verdict_without_the_flag_writes_an_empty_open_minor_list(tmp_path, capsys):
+    repo, _ = make_repo(tmp_path)
+    sha = head_sha(repo)
+    report = tmp_path / "reviewer-report.md"
+    report.write_text(REPORT)
+    assert next_auto.main(verdict_argv(repo, 1, sha, 1, "Approved", report)) == 0
+    capsys.readouterr()
+    verdict = json.loads((repo / ".next-auto" / "attended" / f"verdict-{sha}.json").read_text())
+    assert verdict["open_minor"] == []
+    assert set(verdict) == {"head", "verdict", "reviewer", "model", "round", "open_minor"}
+
+
+def test_r4_merge_accepts_an_approved_verdict_that_lists_open_minors(tmp_path, monkeypatch):
+    """I4: Minors never block a merge. The gate reads the verdict word alone, so an Approved
+    file carrying a non-empty open_minor list merges as a bare Approved does."""
+    repo, sha = merge_ready(tmp_path)
+    write_verdict(repo, sha, open_minor=["src/a.py:3"])
+    calls = []
+    monkeypatch.setattr(next_auto, "gh", merge_gh(calls, green_pr(sha)))
+    rc, lines = next_auto.merge_pr(repo, 7, **merge_kwargs())
+    assert (rc, lines) == (0, [f"MERGED PR #7 {MERGE_SHA}"])
+
+
+# ---- one fix round for the chunk, committed as a fix (3.5.12 spec R5, Step 7) -----------------
+
+FIX_ROUND_PLAN = PLAN.replace(
+    "### Step 1: first", "## Chunk A: the fixtures\n\n### Step 1: first", 1
+)
+
+
+def _repo_with_step_commit(tmp_path, plan_text, n, title):
+    """A repository whose HEAD is the step's own `feat(step-N):` commit, as a chunk boundary
+    finds it, with one fix staged after it: the shape of the 3.5.11 dogfood's Chunk A review
+    (docs/public-release.md, the 2026-11-06 09:50 EST Handoff, items 4 and 5), where a
+    Critical on an earlier step and the repeated feat(step-N) subject were both noted."""
+    repo, _ = make_repo(tmp_path)
+    git(repo, "remote", "set-head", "origin", "main")
+    if plan_text != PLAN:
+        (repo / "prompt_plan.md").write_text(plan_text)
+        git(repo, "commit", "-qam", "plan variant")
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 1\nY = 2\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", f"feat(step-{n}): {title}")
+    (repo / "src.py").write_text(
+        "# Description: fixture\n# Description: two\nX = 1\nY = 2\nZ = 3\n"
+    )
+    return repo
+
+
+def test_r5_commit_fix_writes_the_chunk_subject_when_the_plan_has_chunk_labels(tmp_path):
+    repo = _repo_with_step_commit(tmp_path, FIX_ROUND_PLAN, 2, "slugify")
+    rc, line = next_auto.commit_attended(repo, 2, "guard the empty input", fix=True)
+    assert rc == 0, line
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "fix(chunk A): guard the empty input"
+    )
+
+
+def test_r5_commit_fix_writes_the_step_subject_when_the_plan_has_no_chunks(tmp_path, capsys):
+    """The spec's own form, `commit N --fix "<summary>"`: the flag carries the summary (the
+    Chunk C review's Critical: a store_true flag left the summary as an extra positional)."""
+    repo = _repo_with_step_commit(tmp_path, PLAN, 2, "slugify")
+    rc = next_auto.main(["--root", str(repo), "commit", "2", "--fix", "guard the empty input"])
+    assert rc == 0, capsys.readouterr().err
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == (
+        "fix(step-2): guard the empty input"
+    )
+
+
+def test_r5_commit_refuses_a_title_beside_a_fix_summary(tmp_path, capsys):
+    repo = _repo_with_step_commit(tmp_path, PLAN, 2, "slugify")
+    rc = next_auto.main(
+        ["--root", str(repo), "commit", "2", "--title", "a title", "--fix", "a summary"]
+    )
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == (
+        "COMMIT REFUSED step 2: --title and --fix both carry a subject; "
+        "pass the summary to --fix alone"
+    )
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == "feat(step-2): slugify"
+
+
+def test_r5_commit_fix_is_refused_without_the_steps_own_commit(tmp_path, capsys):
+    repo = _repo_with_step_commit(tmp_path, FIX_ROUND_PLAN, 1, "first")
+    rc = next_auto.main(["--root", str(repo), "commit", "2", "--fix", "a fix"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == "COMMIT REFUSED step 2: --fix needs the step's own commit first"
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == "feat(step-1): first"
+    assert git(repo, "status", "--porcelain").stdout.strip() != ""
+
+
+def test_r5_commit_fix_reads_the_plans_own_branch_not_the_history_behind_it(tmp_path, capsys):
+    """The scan is bounded at the merge-base with the default branch (rul-31f63c0f72,
+    2026-11-08, the Chunk C review's Minor): an earlier plan's `feat(step-2):` commit on main
+    does not stand in for this plan's, which has not committed step 2."""
+    repo, _ = make_repo(tmp_path)
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 0\n")
+    git(repo, "commit", "-qam", "feat(step-2): slugify")
+    git(repo, "push", "-q", "origin", "main")
+    git(repo, "remote", "set-head", "origin", "main")
+    (repo / "prompt_plan.md").write_text(FIX_ROUND_PLAN)
+    git(repo, "commit", "-qam", "feat(step-1): first")
+    (repo / "src.py").write_text("# Description: fixture\n# Description: two\nX = 1\n")
+    rc = next_auto.main(["--root", str(repo), "commit", "2", "--fix", "a fix"])
+    out = capsys.readouterr()
+    assert rc == 1
+    assert out.err.strip() == "COMMIT REFUSED step 2: --fix needs the step's own commit first"
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == "feat(step-1): first"
+
+
+def test_r5_commit_fix_is_apparatus_when_origin_head_is_unset(tmp_path, capsys):
+    repo = _repo_with_step_commit(tmp_path, PLAN, 2, "slugify")
+    git(repo, "remote", "set-head", "origin", "--delete")
+    rc = next_auto.main(["--root", str(repo), "commit", "2", "--fix", "a fix"])
+    out = capsys.readouterr()
+    assert rc == 2
+    assert out.err.strip() == (
+        "COMMIT APPARATUS step 2: cannot find the default branch that bounds the --fix scan: "
+        "origin/HEAD is not set; run git remote set-head origin -a"
+    )
+    assert git(repo, "log", "-1", "--format=%s").stdout.strip() == "feat(step-2): slugify"
+
+
+def test_r5_a_runs_fix_round_commit_carries_the_fix_subject_without_a_flag(tmp_path, capsys):
+    """The auto loop's per-step fix round commits through the same path with the fix read
+    from the state the second step-begin K recorded; the first commit stays feat(step-K)."""
+    repo, wt = start_wt(tmp_path)
+    first = run_step_one(repo, wt)
+    assert git(wt, "log", "-1", "--format=%s").stdout.strip() == "feat(step-1): first"
+    next_auto.step_begin(repo, 1, test_cmd=TEST_CMD)
+    assert next_auto.load_state(repo)["fix_round"] is True
+    fix_step(wt)
+    assert next_auto.gate(repo, 1, test_cmd=TEST_CMD, lint_cmd=LINT_OK)[0]
+    next_auto.set_step(repo, 1, "done", "3 tests green, fix round")
+    assert next_auto.main(["--root", str(repo), "commit", "1"]) == 0
+    capsys.readouterr()
+    assert head_sha(wt) != first
+    assert git(wt, "log", "-1", "--format=%s").stdout.strip() == "fix(step-1): first"
+
+
+# ---- the verdict filter reads only direct bullets as findings (3.5.12 spec R7, Step 8) --------
+
+# the 2026-11-06 dogfood's re-review shape (docs/public-release.md, the 09:50 EST Handoff, item
+# 2): an empty Minor section followed by the reviewer's evidence list, whose bullets the filter
+# read as Minor findings and dropped for no file:line
+CHECKS_RUN = (
+    "Checks run against the fix diff:\n"
+    "- uv run pytest: 7 passed\n"
+    "- uv run ruff check .: clean\n"
+    "- the two R-tokens present\n"
+)
+
+
+def test_r7_prose_under_an_empty_section_ends_its_findings_so_evidence_bullets_pass_through(
+    tmp_path, capsys
+):
+    repo, sha = _span_repo(tmp_path)
+    report = tmp_path / "reviewer-report.md"
+    text = _span_report(SPAN_KEPT, "None\n\n" + CHECKS_RUN)
+    report.write_bytes(text.encode())
+    assert next_auto.main(verdict_argv(repo, 1, sha, 2, "Approved", report)) == 0
+    attended = repo / ".next-auto" / "attended"
+    verdict = attended / f"verdict-{sha}.json"
+    assert capsys.readouterr().out.strip() == f"VERDICT Approved {verdict}"
+    assert (attended / f"review-{sha}-2.md").read_bytes() == text.encode()
+    assert not (attended / f"review-{sha}-2.orig.md").exists()
+
+
+def test_r7_a_true_finding_before_the_evidence_list_is_kept_and_the_list_stays_text(tmp_path):
+    repo, sha = _span_repo(tmp_path)
+    text = _span_report("None\n", SPAN_KEPT + "\n" + CHECKS_RUN)
+    kept, dropped = next_auto.filter_findings(text, repo, sha)
+    assert (kept, dropped) == (text, [])
+    # the engine's own parse: one Minor finding, the evidence bullets not among them
+    assert [f[0] for f in next_auto._findings(text.split("\n"))] == ["Minor"]
+
+
+def test_r7_a_prose_line_without_a_colon_ends_the_findings_too(tmp_path):
+    """The rule is the margin prose line, not its punctuation."""
+    repo, sha = _span_repo(tmp_path)
+    text = _span_report(SPAN_KEPT, "None\n\nEvidence the reviewer read\n- the fixture names\n")
+    kept, dropped = next_auto.filter_findings(text, repo, sha)
+    assert (kept, dropped) == (text, [])
+
+
+def test_r7_a_bullet_directly_under_the_header_with_no_file_line_is_still_dropped(tmp_path):
+    repo, sha = _span_repo(tmp_path)
+    text = _span_report(SPAN_KEPT, SPAN_NO_LOC + "\n" + CHECKS_RUN)
+    kept, dropped = next_auto.filter_findings(text, repo, sha)
+    assert dropped == ["no file:line"]
+    assert "Dropped from Minor: no file:line at the start of the finding" in kept
+    assert CHECKS_RUN in kept
+    assert kept.index(CHECKS_RUN) < kept.index("### Dropped findings")
+
+
+LEAD_IN = "One finding, in the gate:\n"
+
+
+def test_r7_a_file_line_bullet_after_a_lead_in_line_is_still_a_finding(tmp_path):
+    """The Chunk C review's narrower rule (rul-295055ba37, 2026-11-08): margin prose ends the
+    plain bullets of a section, not a bullet that itself starts with `file:line`, so a
+    reviewer's lead-in line never carries a Critical past the span check."""
+    repo, sha = _span_repo(tmp_path)
+    text = _span_report(LEAD_IN + SPAN_ABSENT, "None\n")
+    kept, dropped = next_auto.filter_findings(text, repo, sha)
+    assert dropped == ["src/app.py:9"]
+    assert LEAD_IN in kept
+    assert SPAN_ABSENT not in kept.split("### Dropped findings")[0]
+    assert (
+        f"Dropped from Important: the quoted span does not occur in src/app.py at {sha[:8]}"
+    ) in kept
+    kept_text = _span_report(LEAD_IN + SPAN_KEPT, "None\n")
+    assert next_auto.filter_findings(kept_text, repo, sha) == (kept_text, [])
+    assert [f[0] for f in next_auto._findings(kept_text.split("\n"))] == ["Important"]
+
+
+def test_r7_the_record_grammar_still_refuses_the_evidence_prose_the_filter_passes(tmp_path):
+    """The divergence pinned (rul-3e1be1c11f, 2026-11-08): countFindings at acme/platform
+    1566fad raises on a margin prose line under a severity header, so a Record plan whose
+    reviewer writes the dogfood's evidence list under an empty Minor passes the filter and
+    fails the append until record.mjs adopts the margin-prose rule by its own PR (the handoff
+    to the devbox session). Green at the base: it pins what is, not a change."""
+    repo, sha = _span_repo(tmp_path)
+    text = _span_report(SPAN_KEPT, "None\n\n" + CHECKS_RUN)
+    assert next_auto.filter_findings(text, repo, sha) == (text, [])
+    with pytest.raises(ValueError, match="not a bullet, a line under one, or None"):
+        count_findings(text)

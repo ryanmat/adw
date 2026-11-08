@@ -3,5 +3,6 @@
   "verdict": "NeedsFixes",
   "reviewer": "adw:next-reviewer",
   "model": "opus",
-  "round": 1
+  "round": 1,
+  "open_minor": []
 }

@@ -123,7 +123,7 @@ Medium / Low, map High to Important and both Medium and Low to Minor.
 - **Important**: should be fixed, but the run continues and it goes to the plan's Findings
   section for the human: fragile behavior, swallowed errors, verbatim duplication of a
   logic block, maintainability damage.
-- **Minor**: polish and coverage suggestions.
+- **Minor**: polish and coverage suggestions, never blocking.
 
 A step whose diff rewrites existing test assertions is at least Important, whatever its
 size. An agent that changes behavior and then edits the assertion to match is the drift
@@ -206,8 +206,11 @@ Verdict **every** finding in order:
 <issues entirely outside the fix diff; non-blocking, "None" if none>
 
 ### Verdict
-Fix round: All findings addressed, no new Critical | Findings remain open: <list>
+Fix round: All findings addressed, no new Critical | All Critical and Important findings addressed; Minor open: <list> | Findings remain open: <list>
 ```
+
+The middle form is the verdict when every Critical and Important finding is ADDRESSED and
+only Minors remain, listed; Minors are never blocking, so that round is Approved.
 
 Each finding under New breakage takes the first round's form: `file:line` first, with the
 `> ` quote under it. The three headers under New breakage count only what this round raised: a finding carried

@@ -1,6 +1,6 @@
 {
   "name": "adw",
-  "version": "3.5.11",
+  "version": "3.5.12",
   "description": "The spec, plan, run pipeline: /adw:spec, /adw:plan-tdd, /adw:next (attended, and hold-only unattended with /adw:next auto), the plan-grammar and auto-run scripts with the plan-time step size estimate (Size: and Step-size:), the PreToolUse guard hook that arms while a run is live, the Stop hook that holds an attended turn to the plan's Test, the ruling-log and ruling-recall hooks that record dialog rulings in a project that opted in and deny a dialog until each matching ruling was shown, the next-implementer and next-reviewer run agents, the spec-miner agent that mines a brownfield codebase into the baseline spec.md ahead of /adw:plan-tdd, and the markdown deliverables skill.",
   "author": {
     "name": "Ryan Matuszewski"

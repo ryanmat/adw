@@ -193,6 +193,66 @@ def test_reset_fixture_follows_a_moved_baseline_tag(tmp_path, monkeypatch):
     assert git(work, "rev-parse", "baseline^{commit}").stdout.strip() == new
 
 
+# 3.5.12 spec R8 (Step 11): the remember plugin's hooks write .remember/ into the fixture clone
+# as the previous scenario's CLI session ends, and `git clean -qfdx` raced the last writes
+# (2026-11-05 22:36 EST, docs/adw-3.5.11-engine-plan.md:98); the reset removes the directory
+# itself and retries the clean once before it raises
+def _fake_git(clean_codes):
+    """A git whose `clean` answers the given exit codes in order and whose every other call
+    succeeds with empty output; the calls are kept on the function."""
+    codes = list(clean_codes)
+    calls = []
+
+    def fake(root, *args, check=True):
+        calls.append(args)
+        rc = 0
+        stderr = ""
+        if args[:1] == ("clean",):
+            rc = codes.pop(0)
+            stderr = "warning: failed to remove .remember/tmp: Directory not empty" if rc else ""
+        if check and rc != 0:
+            raise run_scenario.GraderError(f"git {' '.join(args)} failed ({rc})")
+        return subprocess.CompletedProcess(["git", *args], rc, stdout="", stderr=stderr)
+
+    fake.calls = calls
+    return fake
+
+
+def test_reset_fixture_retries_a_failed_clean_once_after_two_seconds(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    _gh_shim(tmp_path, monkeypatch)
+    fake = _fake_git([1, 0])
+    slept = []
+    monkeypatch.setattr(run_scenario, "git", fake)
+    monkeypatch.setattr(run_scenario.time, "sleep", slept.append)
+    run_scenario.reset_fixture(clone)
+    assert [c for c in fake.calls if c[:1] == ("clean",)] == [("clean", "-qfdx")] * 2
+    assert slept == [2]
+
+
+def test_reset_fixture_raises_when_the_clean_fails_twice(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    _gh_shim(tmp_path, monkeypatch)
+    fake = _fake_git([1, 1])
+    monkeypatch.setattr(run_scenario, "git", fake)
+    monkeypatch.setattr(run_scenario.time, "sleep", lambda _s: None)
+    with pytest.raises(run_scenario.GraderError, match="git clean -qfdx failed"):
+        run_scenario.reset_fixture(clone)
+    assert len([c for c in fake.calls if c[:1] == ("clean",)]) == 2
+
+
+def test_reset_fixture_removes_the_remember_directory_before_the_clean(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    (clone / ".remember" / "tmp").mkdir(parents=True)
+    (clone / ".remember" / "tmp" / "x").write_text("late write\n")
+    _gh_shim(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_scenario, "git", _fake_git([0]))
+    run_scenario.reset_fixture(clone)
+    assert not (clone / ".remember").exists()
+
+
 def test_gather_scopes_prs_to_those_created_after_the_run_started(tmp_path, monkeypatch):
     """A merged PR from before the run (the ruleset probe, PR #6) is not a PR the run
     opened or merged. Only PRs created at or after the run's start count."""
@@ -501,6 +561,37 @@ def test_eval_step_scenario_and_plan_fixture_are_well_formed():
     assert parsed.conventions["Holdout"] == "evals/"
     assert parsed.conventions["Eval-codes"] == "exit0"
     assert [s.eval for s in parsed.steps] == [True]
+
+
+def test_scripts_root_scenario_and_plan_fixture_are_well_formed():
+    """3.5.12 R1's tenth scenario: the dark factory's 2026-11-05 APPARATUS (run
+    20261105-f7688c, read on devbox 2026-11-07) was a module the step added under scripts/,
+    a root the target's conftest.py puts on sys.path and the red proof could not resolve.
+    The scenario is happy-path's shape over a one-step plan whose module lives there."""
+    import next_plan
+
+    here = RUNNER.parent
+    sc = run_scenario.Scenario.load(here / "scenarios" / "scripts-root.json")
+    assert sc.plan == "scripts-root"
+    assert sc.cost_cap_usd == Decimal("6.0")
+    happy = run_scenario.Scenario.load(here / "scenarios" / "happy-path.json")
+    assert sc.graders == happy.graders
+    assert sc.grader_args == {
+        "plan_step_states": {"1": "DONE"},
+        "commits_on_branch_at_least": {"n": 1},
+        "pr_opened_labeled": {"label": "next-auto"},
+    }
+    plan = (here / "fixtures" / "plans" / f"{sc.plan}.md").read_text()
+    assert next_plan.validate_text(plan) == []
+    parsed = next_plan.parse_plan(plan)
+    assert [s.state for s in parsed.steps] == ["PENDING"]
+    assert parsed.steps[0].size == 80 and parsed.steps[0].mutation == "required"
+    assert "scripts/trace_tool.py" in parsed.steps[0].body
+    assert "tests/test_trace_tool.py" in parsed.steps[0].body
+    conftest = (here / "fixtures" / "baseline" / "conftest.py").read_text()
+    assert 'sys.path.insert(0, str(Path(__file__).parent / "src"))' in conftest
+    assert 'sys.path.insert(0, str(Path(__file__).parent / "scripts"))' in conftest
+    assert (here / "fixtures" / "baseline" / "scripts" / ".gitkeep").is_file()
 
 
 def test_run_eval_extra_is_ruff_clean_and_reports_its_verdict(tmp_path):
@@ -1120,8 +1211,8 @@ def test_decision_stop_empty_scenario_and_plan_fixture_are_well_formed():
     assert next_plan.parse_plan(sibling).steps[1].body.strip() == parsed.steps[0].body.strip()
 
 
-def test_list_prints_nine_scenarios(capsys):
+def test_list_prints_ten_scenarios(capsys):
     assert run_scenario.main(["--list"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 9, lines
+    assert len(lines) == 10, lines
     assert any(ln.startswith("decision-stop-empty ") for ln in lines)

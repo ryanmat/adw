@@ -147,7 +147,12 @@ def ensure_clone(workdir: Path) -> Path:
 
 
 def reset_fixture(clone: Path) -> str:
-    """Return the fixture to the baseline tag and clear every artifact of a prior run."""
+    """Return the fixture to the baseline tag and clear every artifact of a prior run. The
+    remember plugin's hooks write `.remember/` into the clone as the previous scenario's CLI
+    session ends, and `git clean -qfdx` raced the last writes on 2026-11-05 22:36 EST
+    (docs/adw-3.5.11-engine-plan.md:98), so the reset removes that directory itself and, on a
+    clean that still fails, waits two seconds and runs it once more before it raises
+    (3.5.12 R8)."""
     # close any PR a prior run opened, and delete its branch
     listing = subprocess.run(
         ["gh", "pr", "list", "--repo", FIXTURE_REPO, "--state", "open", "--json", "number"],
@@ -173,7 +178,13 @@ def reset_fixture(clone: Path) -> str:
     # --force: a moved baseline tag must follow the remote, or the reset lands on the old commit
     git(clone, "fetch", "--quiet", "--prune", "--tags", "--force", "origin")
     git(clone, "reset", "--hard", "--quiet", BASELINE_TAG)
-    git(clone, "clean", "-qfdx")
+    shutil.rmtree(clone / ".remember", ignore_errors=True)
+    cleaned = git(clone, "clean", "-qfdx", check=False)
+    if cleaned.returncode != 0:
+        time.sleep(2)
+        cleaned = git(clone, "clean", "-qfdx", check=False)
+        if cleaned.returncode != 0:
+            raise GraderError(f"git clean -qfdx failed: {cleaned.stderr.strip()[-400:]}")
 
     # local and remote run branches from prior scenarios
     for line in git(clone, "branch", "--list", "next-auto/*").stdout.splitlines():

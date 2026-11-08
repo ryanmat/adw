@@ -374,15 +374,17 @@ def _tracked_file(tree: Path, word: str) -> str | None:
     return names[0] if ok else None
 
 
-def _default_branch_ref(root: Path, default: str | None) -> tuple[str | None, str | None]:
-    """origin/<default> for a run, origin/HEAD's branch otherwise, or why there is none."""
+def _default_branch_ref(
+    root: Path, default: str | None, purpose: str = "the default branch's appender"
+) -> tuple[str | None, str | None]:
+    """origin/<default> for a run, origin/HEAD's branch otherwise, or why there is none,
+    the reason naming `purpose`, what the caller wanted the branch for."""
     if default:
         return f"origin/{default}", None
     r = git(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
     if r.returncode != 0 or not r.stdout.strip():
         return None, (
-            "cannot find the default branch's appender: origin/HEAD is not set; "
-            "run git remote set-head origin -a"
+            f"cannot find {purpose}: origin/HEAD is not set; run git remote set-head origin -a"
         )
     return r.stdout.strip(), None
 
@@ -754,13 +756,25 @@ _FINDING_AT_RE = re.compile(r"[-*] `?([^\s`]+?):(\d+)")
 def _findings(lines: list[str]) -> list[tuple[str, int, int, int]]:
     """Each finding under a severity header as (severity, header line, first line, end), its
     lines lines[first:end] with the blank lines after it left out. Read in countFindings'
-    order: a heading first, then a bullet at the margin, then a line indented under it."""
+    order: a heading first, then a bullet at the margin, then a line indented under it. A
+    finding is a margin bullet that comes before any margin prose line of its section, or one
+    that itself starts with `file:line` wherever it stands: a non-blank margin line that is
+    neither a heading nor a bullet ends the section's plain bullets (3.5.12 R7), so a `Checks
+    run against the fix diff:` line and the bullets under it are the reviewer's evidence, kept
+    as text and neither counted nor dropped, as is the `None` an empty section carries, while
+    a `- file:line` bullet after a lead-in line still meets the span check (rul-295055ba37)."""
     out: list[tuple[str, int, int, int]] = []
     severity = header = first = last = None
+    prose = False
     for i, raw in enumerate(lines):
         trimmed = raw.strip()
         heading = _HEADING_RE.match(trimmed)
-        bullet = not heading and severity is not None and _BULLET_RE.match(raw)
+        bullet = (
+            not heading
+            and severity is not None
+            and _BULLET_RE.match(raw)
+            and (not prose or _FINDING_AT_RE.match(raw))
+        )
         if first is not None and not (heading or bullet) and (not trimmed or raw[:1].isspace()):
             if trimmed:
                 last = i
@@ -769,9 +783,11 @@ def _findings(lines: list[str]) -> list[tuple[str, int, int, int]]:
             out.append((severity, header, first, last + 1))
             first = None
         if heading:
-            severity, header = _SEVERITIES.get(trimmed), i
+            severity, header, prose = _SEVERITIES.get(trimmed), i, False
         elif bullet:
             first = last = i
+        elif trimmed and severity is not None:
+            prose = True
     if first is not None:
         out.append((severity, header, first, last + 1))
     return out
@@ -863,14 +879,19 @@ def record_verdict(
     report: Path,
     *,
     plan: str = "prompt_plan.md",
+    open_minor: list[str] | None = None,
 ) -> tuple[int, str]:
     """One reviewer round (ai-dlc-record R11, R12): write the verdict file with the reviewer
     definition's identity and model, keep the report beside it, and, when the plan carries
     Record, append review.verdict from the two. Attended files are keyed by the reviewed
     head, a run's by step and round. The kept report is filter_findings' (spec item 12), the
     reviewer's text beside it as `.orig.md` when a finding was dropped, so the record counts
-    the kept findings; the verdict is the reviewer's, unchanged. Exit 0 written, 1 refused, 2
-    when the definition cannot be read or the append failed after the files were written."""
+    the kept findings; the verdict is the reviewer's, unchanged. `open_minor` (3.5.12 R4,
+    rul-5a7bc322a6) names the Minor findings a re-review left open under an Approved verdict,
+    written as the file's `open_minor` list (empty without the flag), so the record says what
+    was left and the merge gate's reading of the verdict word is unchanged. Exit 0 written, 1
+    refused, 2 when the definition cannot be read or the append failed after the files were
+    written."""
     resolved, rc, why = resolve_head(root, head)
     if rc == 2:
         return 2, f"VERDICT APPARATUS step {n}: {why}"
@@ -893,7 +914,14 @@ def record_verdict(
     original = report.read_bytes()
     reviewed = Path(state["worktree"]) if state else root
     kept_text, dropped = filter_findings(original.decode("utf-8"), reviewed, head)
-    body = {"head": head, "verdict": verdict, "reviewer": reviewer, "model": model, "round": round_}
+    body = {
+        "head": head,
+        "verdict": verdict,
+        "reviewer": reviewer,
+        "model": model,
+        "round": round_,
+        "open_minor": open_minor or [],
+    }
     verdict_file.parent.mkdir(parents=True, exist_ok=True)
     verdict_file.write_text(json.dumps(body, indent=2), encoding="utf-8")
     if dropped:
@@ -1480,6 +1508,7 @@ def records_gap(note: str, n: int) -> bool:
 
 
 MUTATION_CLAIM_RE = re.compile(r"\bmutation killed\b")
+
 
 def mutation_claim_conflict(
     step: next_plan.Step, note: str, *, comment_only: bool = False
@@ -2495,11 +2524,19 @@ def foreign_resolution(output: str, scratch: Path, changed: set[str], tree: Path
     JavaScript module the step's tree holds at none of its paths (ruled 2026-10-02, OPEN 5 (B)):
     the tree no longer needs it, or Test fails there and counts the attempt. A module the tree
     holds and the step does not add, such as an ignored generated file, stays foreign, as does
-    a package, a Python name and a path outside the scratch. A run with any other failure
-    stands as red."""
+    a package, a Python name and a path outside the scratch. A bare Python name is also the
+    step's when a changed `.py` file's stem equals its last dotted component (3.5.12 R1,
+    rul-ec38be5b71): a module the step adds under a root the tree arranges through
+    `conftest.py`'s `sys.path`, which `_python_roots` cannot see, is the step's by the file's
+    name. A run with any other failure stands as red."""
     misses = _runner_misses(_ANSI_RE.sub("", output))
     roots = _python_roots(tree)
     for spec, importer in misses or []:
+        if importer is None and any(
+            path.endswith(".py") and Path(path).stem == spec.rsplit(".", 1)[-1]
+            for path in changed
+        ):
+            continue
         paths = _module_paths(spec, importer, scratch, roots)
         if any(path in changed for path in paths):
             continue
@@ -3088,18 +3125,35 @@ def _commit_index(worktree: Path, message: str, what: str) -> str:
     return git(worktree, "rev-parse", "HEAD").stdout.strip()
 
 
-def commit_step(worktree: Path, n: int, title: str) -> str:
+def commit_step(
+    worktree: Path, n: int, title: str, *, fix: bool = False, chunk: str | None = None
+) -> str:
+    """The step's commit of the index: `feat(step-N): <title>` for the step's own commit,
+    and for a fix round (3.5.12 R5, rul-a4012a6d7c) `fix(chunk <L>): <title>` when the
+    boundary names the chunk's label and `fix(step-N): <title>` otherwise, so the fix round
+    never repeats the step's own subject."""
     _refuse_prefixed(title)
-    return _commit_index(worktree, f"feat(step-{n}): {title}", f"step {n}")
+    if fix and chunk:
+        subject = f"fix(chunk {chunk}): {title}"
+    elif fix:
+        subject = f"fix(step-{n}): {title}"
+    else:
+        subject = f"feat(step-{n}): {title}"
+    return _commit_index(worktree, subject, f"step {n}")
 
 
 def commit_attended(
-    root: Path, n: int, title: str = "", *, plan: str = "prompt_plan.md"
+    root: Path, n: int, title: str = "", *, plan: str = "prompt_plan.md", fix: bool = False
 ) -> tuple[int, str]:
     """The attended loop's commit, run-less: stage the tree, run the staged-safe scan over
     what is staged (the plan note written after `check N` restored the index reaches git
     only here), commit at the root with the step's conventional message, and remove the
     step's check record and brief. Writes no state.json, so the guard stays unarmed.
+    `fix` (3.5.12 R5) is the chunk boundary's fix round: the subject is `fix(chunk <L>):`
+    with the step's chunk label when the plan has chunks and `fix(step-N):` otherwise, and it
+    is refused when the log from the fork off the default branch to HEAD holds no
+    `feat(step-N):` commit, since a fix needs the step's own commit first on the plan's own
+    branch; an unset origin/HEAD is apparatus there.
     With a result file from `check N` it adds the commit and the mutation value; with
     Record in the plan it requires that file before committing and appends step.done
     after (R11, R12), refusing a result file a commit already used or one whose tree is not
@@ -3139,11 +3193,26 @@ def commit_attended(
             reason = _tree_moved(root, result_path, [plan], n, "check")
             if reason:
                 return 1, f"COMMIT REFUSED step {n}: {reason}"
+        step = next((s for s in parsed.steps if s.number == n), None)
         if not title:
-            step = next((s for s in parsed.steps if s.number == n), None)
             title = step.title if step else f"step {n}"
+        chunk = None
+        if fix:
+            # the plan's own branch alone (rul-31f63c0f72): an earlier plan's step-N subject
+            # behind the fork from the default branch is not this step's commit
+            base, problem = _default_branch_ref(
+                root, None, "the default branch that bounds the --fix scan"
+            )
+            if problem:
+                return 2, f"COMMIT APPARATUS step {n}: {problem}"
+            fork = git(root, "merge-base", base, "HEAD").stdout.strip()
+            subjects = git(root, "log", "--format=%s", f"{fork}..HEAD").stdout.splitlines()
+            if not any(line.startswith(f"feat(step-{n}): ") for line in subjects):
+                return 1, f"COMMIT REFUSED step {n}: --fix needs the step's own commit first"
+            if step is not None and step.chunk:
+                chunk = next_plan.chunk_label(step.chunk)
         try:
-            sha = commit_step(root, n, title)
+            sha = commit_step(root, n, title, fix=fix, chunk=chunk)
         except TitleRefusedError as exc:
             return 1, f"COMMIT REFUSED step {n}: {exc}"
         except RuntimeError as exc:
@@ -3257,7 +3326,8 @@ def commit_run(root: Path, n: int, title: str = "") -> tuple[int, str]:
         step = next((s for s in parsed.steps if s.number == n), None)
         title = step.title if step else f"step {n}"
     try:
-        sha = commit_step(wt, n, title)
+        # the auto loop's fix round is per step, so its subject is fix(step-K): with no chunk
+        sha = commit_step(wt, n, title, fix=bool(state.get("fix_round")))
     except TitleRefusedError as exc:
         return 1, f"COMMIT REFUSED step {n}: {exc}"
     state.setdefault("steps", {})[str(n)] = {"state": "DONE", "note": f"commit {sha[:8]}"}
@@ -3786,6 +3856,14 @@ def summary_sections(state: dict, reason: str | None = None) -> list[tuple[str, 
         f"- Branch: {state['branch']}",
         f"- Stop reason: {reason}",
     ]
+    if state.get("review_skipped"):
+        # 3.5.12 R2: the body's first line says what the title's suffix says, so a reader of
+        # either knows the step was committed and gate-passed, not reviewed
+        head[:0] = [
+            f"Review skipped: {state['review_skipped']}; the step is committed and "
+            "gate-passed, not reviewed",
+            "",
+        ]
     if not state.get("steps"):
         head.append("- No pull request: the run committed no step")
     steps = ["### Steps", ""]
@@ -3852,21 +3930,68 @@ def _bring_plan_home(root: Path, state: dict, wt: Path) -> None:
         (Path(root) / state["plan"]).write_bytes((wt / state["plan"]).read_bytes())
 
 
-def wrap_up(root: Path, *, repo_slug: str | None = None, reason: str | None = None) -> dict:
+# the words --review-skipped takes: why the coordinator skipped the review round (3.5.12 R2)
+REVIEW_SKIPPED_WHY = ("budget", "turns", "context")
+
+
+class WrapUpRefusedError(RuntimeError):
+    """A wrap-up refused before anything happened: the marker stays, nothing was committed,
+    pushed or opened, and the CLI prints WRAP-UP REFUSED rather than WRAP-UP FAILED."""
+
+
+def _every_committed_step_reviewed(state: dict) -> bool:
+    """True when the run committed at least one step and each has a first-round verdict file
+    in the run dir, the shape record_verdict writes for a run (verdict-<n>-1.json)."""
+    committed = state.get("steps") or {}
+    run_dir = Path(state["run_dir"])
+    return bool(committed) and all(
+        (run_dir / f"verdict-{n}-1.json").is_file() for n in committed
+    )
+
+
+def wrap_up(
+    root: Path,
+    *,
+    repo_slug: str | None = None,
+    reason: str | None = None,
+    review_skipped: str | None = None,
+) -> dict:
     """Close a run: commit the plan, write the summary, push, open the hold-only PR,
     and only then remove the marker. Any failure before the PR exists leaves the marker
     in place so the guard hook stays armed. With Record in the plan, pending record lines
     are committed alone after the plan and before the push, and the PR is then recorded
     (pr.opened on the head it opened on, the record committed alone, a second push); a
     failure after the PR exists is returned under `record` and the run still ends, since a
-    second wrap-up would try to open the PR again."""
+    second wrap-up would try to open the PR again.
+
+    `review_skipped` (3.5.12 R2, rul-df43122a34): a commit means a wrap-up, and the review
+    is the stage a budget, turn or context stop may skip. The word is recorded in state.json
+    as `review_skipped`, appended to the reason as ` (review skipped: <why>)` so the title,
+    the stop line and both bodies carry it, and both bodies open with one line saying the
+    step is committed and gate-passed, not reviewed. A run whose every committed step has a
+    verdict file, and a run that committed no step, refuse the flag before anything happens
+    (I3): the marker cannot dress a reviewed run or a hand-back. A wrap-up run again without
+    the flag, after a failed push or PR, reads the saved word, so every surface stays marked."""
     state = load_state(root)
     if not state:
         raise RuntimeError("no active run")
+    if review_skipped is not None:
+        if not state.get("steps"):
+            raise WrapUpRefusedError("--review-skipped on a run that committed no step")
+        if _every_committed_step_reviewed(state):
+            raise WrapUpRefusedError("--review-skipped on a run whose every step was reviewed")
+        state["review_skipped"] = review_skipped
+        save_state(state)
+    else:
+        # a wrap-up run again after a failed push or PR carries the word the first run saved,
+        # so the title and the stop line read the same source as the body (I3)
+        review_skipped = state.get("review_skipped")
     wt = Path(state["worktree"])
     branch = state["branch"]
     plan = _worktree_plan(state)
     reason = reason or derive_reason(plan)
+    if review_skipped is not None:
+        reason = f"{reason} (review skipped: {review_skipped})"
     tracked = state.get("plan_tracked", True)
 
     if tracked:
@@ -3995,6 +4120,12 @@ def main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("wrap-up")
     w.add_argument("--reason", default=None)
     w.add_argument("--repo", default=None, help="owner/repo; default from origin")
+    w.add_argument(
+        "--review-skipped",
+        choices=list(REVIEW_SKIPPED_WHY),
+        default=None,
+        help="the review round was skipped for this reason; marks the title, body and stop line",
+    )
 
     st = sub.add_parser("set")
     st.add_argument("n", type=int)
@@ -4010,6 +4141,12 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("n", type=int)
         if name == "commit":
             sp.add_argument("--title", default="")
+            sp.add_argument(
+                "--fix",
+                metavar="SUMMARY",
+                default=None,
+                help="attended: the chunk boundary's fix round, committed as fix(...): <SUMMARY>",
+            )
         if name == "review-package":
             sp.add_argument("--base", default=None, help="attended: render from this sha, run-less")
 
@@ -4031,6 +4168,13 @@ def main(argv: list[str] | None = None) -> int:
     vd.add_argument("--round", type=int, required=True)
     vd.add_argument("--verdict", required=True, choices=["Approved", "NeedsFixes"])
     vd.add_argument("--report", required=True, help="the reviewer's report as saved")
+    vd.add_argument(
+        "--open-minor",
+        action="append",
+        default=None,
+        metavar="LABEL",
+        help="a Minor finding the re-review left open under Approved (repeatable)",
+    )
     sub.add_parser("record-commit")
     # the attended chunk boundary's commit of the plan alone; run-less, outside RUN_COMMANDS
     bc = sub.add_parser("boundary-commit")
@@ -4087,7 +4231,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd in ("verdict", "done-verdict", "record-commit", "pr-opened", "plan-approved"):
         if args.cmd == "verdict":
             report = Path(args.report)
-            rc, line = record_verdict(root, args.n, args.head, args.round, args.verdict, report)
+            rc, line = record_verdict(
+                root, args.n, args.head, args.round, args.verdict, report,
+                open_minor=args.open_minor,
+            )
         elif args.cmd == "done-verdict":
             report = Path(args.report)
             rc, line = record_done_verdict(root, args.head, args.verdict, args.model, report)
@@ -4264,7 +4411,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if reason is None else 1
 
     if args.cmd == "commit" and load_state(root) is None:
-        rc, line = commit_attended(root, args.n, args.title)
+        # the fix round's summary rides on --fix itself (spec R5: `commit N --fix "<summary>"`)
+        if args.fix is not None and args.title:
+            print(
+                f"COMMIT REFUSED step {args.n}: --title and --fix both carry a subject; "
+                "pass the summary to --fix alone",
+                file=sys.stderr,
+            )
+            return 1
+        title = args.fix if args.fix is not None else args.title
+        rc, line = commit_attended(root, args.n, title, fix=args.fix is not None)
         print(line, file=sys.stdout if rc == 0 else sys.stderr)
         return rc
 
@@ -4324,7 +4480,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "wrap-up":
         try:
-            result = wrap_up(root, repo_slug=args.repo, reason=args.reason)
+            result = wrap_up(
+                root,
+                repo_slug=args.repo,
+                reason=args.reason,
+                review_skipped=args.review_skipped,
+            )
+        except WrapUpRefusedError as exc:
+            print(f"WRAP-UP REFUSED: {exc}", file=sys.stderr)
+            return 1
         except RuntimeError as exc:
             print(f"WRAP-UP FAILED: {exc}", file=sys.stderr)
             return 1

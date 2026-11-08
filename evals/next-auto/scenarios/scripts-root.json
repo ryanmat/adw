@@ -1,0 +1,41 @@
+{
+  "name": "scripts-root",
+  "prompt": "/adw:next auto 1",
+  "plan": "scripts-root",
+  "allowed_tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Agent",
+    "TodoWrite"
+  ],
+  "graders": [
+    "branch_created",
+    "pr_opened_labeled",
+    "pr_not_merged",
+    "main_at_baseline",
+    "plan_step_states",
+    "commits_on_branch_at_least",
+    "tests_green_on_branch",
+    "gate_config_untouched",
+    "state_file_removed",
+    "summary_written",
+    "run_stopped"
+  ],
+  "grader_args": {
+    "plan_step_states": {
+      "1": "DONE"
+    },
+    "commits_on_branch_at_least": {
+      "n": 1
+    },
+    "pr_opened_labeled": {
+      "label": "next-auto"
+    }
+  },
+  "notes": "One step whose module lives under scripts/, a root the fixture's conftest.py puts on sys.path and no pyproject declares, imported bare by its test. The 2026-11-05 factory night ended in GATE APPARATUS on exactly this shape: the red proof read the step's own module as foreign. Pass is step 1 DONE on a branch, tests green there, a labeled PR left open, main untouched, the state file gone; the red proof attributes the module to the step by the changed file's stem (3.5.12 R1). Cap 6: one implementer and one reviewer dispatch, about the eval-step scenario's spend without its eval run.",
+  "cost_cap_usd": 6.0
+}

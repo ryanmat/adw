@@ -20,6 +20,7 @@ import re
 import shlex
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -168,10 +169,37 @@ class Plan:
 # ---- parsing ----------------------------------------------------------------
 
 
-def _preceding_h2(lines: list[str], header_idx: int) -> str | None:
-    """The raw text of the nearest H2 line above a step header, or None."""
+def _unfenced(lines: list[str]) -> Iterator[tuple[int, str, bool]]:
+    """Each line with its index and whether it sits in a fenced block (3.5.12 R9): the flag
+    flips on a line whose stripped form starts with three backticks or three tildes, the
+    fence lines themselves flagged, and an unclosed fence runs to the end. Every header scan
+    reads headers from the unflagged lines alone, so a plan that quotes `## Decisions open`
+    or `### Step 9:` inside a code block is read as the text it is; step bodies keep their
+    fences as text, as before."""
+    in_fence = False
+    for i, ln in enumerate(lines):
+        opener = ln.strip().startswith(("```", "~~~"))
+        if opener and not in_fence:
+            in_fence = True
+            yield i, ln, True
+            continue
+        yield i, ln, in_fence
+        if opener and in_fence:
+            in_fence = False
+
+
+def _fence_mask(lines: list[str]) -> list[bool]:
+    """The in-fence flag of every line, for the scans that index lines directly."""
+    return [fenced for _i, _ln, fenced in _unfenced(lines)]
+
+
+def _preceding_h2(
+    lines: list[str], header_idx: int, fenced: list[bool] | None = None
+) -> str | None:
+    """The raw text of the nearest unfenced H2 line above a step header, or None."""
+    fenced = _fence_mask(lines) if fenced is None else fenced
     for j in range(header_idx - 1, -1, -1):
-        if H2_RE.match(lines[j]):
+        if H2_RE.match(lines[j]) and not fenced[j]:
             return lines[j].rstrip()
     return None
 
@@ -184,13 +212,15 @@ def _is_chunk_header(h2: str | None) -> bool:
     return text == "Chunk" or text.startswith("Chunk ")
 
 
-def _enclosing_chunk(lines: list[str], header_idx: int) -> str | None:
+def _enclosing_chunk(
+    lines: list[str], header_idx: int, fenced: list[bool] | None = None
+) -> str | None:
     """The nearest preceding H2's text when it starts with "Chunk", else None.
 
     A step under a bare H2 such as "## Notes" has no chunk even when other steps do;
     validate reports that as a coverage gap once the plan uses chunks at all.
     """
-    h2 = _preceding_h2(lines, header_idx)
+    h2 = _preceding_h2(lines, header_idx, fenced)
     return h2[3:].strip() if _is_chunk_header(h2) else None
 
 
@@ -219,6 +249,7 @@ def _parse_status(value: str) -> tuple[str, str]:
 
 def parse_plan(text: str) -> Plan:
     lines = text.splitlines()
+    fenced = _fence_mask(lines)
     title = ""
     for ln in lines:
         if ln.strip():
@@ -229,11 +260,11 @@ def parse_plan(text: str) -> Plan:
     conv_lines: dict[str, int] = {}
     in_conv = False
     for i, ln in enumerate(lines, start=1):
-        if ln.rstrip() == CONV_HEADER:
+        if ln.rstrip() == CONV_HEADER and not fenced[i - 1]:
             in_conv = True
             continue
         if in_conv:
-            if H2_RE.match(ln):
+            if H2_RE.match(ln) and not fenced[i - 1]:
                 in_conv = False
                 continue
             m = CONV_KEY_RE.match(ln)
@@ -243,17 +274,22 @@ def parse_plan(text: str) -> Plan:
 
     steps: list[Step] = []
     # index step header positions
-    headers = [(i, m) for i, ln in enumerate(lines) for m in [STEP_RE.match(ln)] if m]
+    headers = [
+        (i, m)
+        for i, ln, in_fence in _unfenced(lines)
+        for m in [STEP_RE.match(ln)]
+        if m and not in_fence
+    ]
     for idx, (start, m) in enumerate(headers):
         end = headers[idx + 1][0] if idx + 1 < len(headers) else len(lines)
         # a step body also ends at the next H2 section (Decisions/Findings/prose)
         body_end = end
         for j in range(start + 1, end):
-            if H2_RE.match(lines[j]):
+            if H2_RE.match(lines[j]) and not fenced[j]:
                 body_end = j
                 break
         block = lines[start:body_end]
-        chunk = _enclosing_chunk(lines, start)
+        chunk = _enclosing_chunk(lines, start, fenced)
         state, note, eval_flag, mutation = "", "", False, ""
         test_repo = test_cmd = None
         closes: list[str] = []
@@ -311,13 +347,13 @@ def parse_plan(text: str) -> Plan:
         present = False
         collected: list[str] = []
         grabbing = False
-        for ln in lines:
-            if ln.rstrip() == header:
+        for _i, ln, in_fence in _unfenced(lines):
+            if ln.rstrip() == header and not in_fence:
                 present = True
                 grabbing = True
                 continue
             if grabbing:
-                if H2_RE.match(ln):
+                if H2_RE.match(ln) and not in_fence:
                     break
                 collected.append(ln)
         return "\n".join(collected).strip(), present
@@ -394,14 +430,14 @@ def near_miss_headers(lines: list[str]) -> list[tuple[int, str, str]]:
     or the other tree's form of the header. Returns (1-based line, the text found, the header)
     in document order."""
     out: list[tuple[int, str, str]] = []
-    for i, ln in enumerate(lines, 1):
+    for i, ln, in_fence in _unfenced(lines):
         text = ln.rstrip()
-        m = _NEAR_MISS_RE.match(text)
+        m = None if in_fence else _NEAR_MISS_RE.match(text)
         if m is None:
             continue
         header = DECISIONS_HEADER if m.group(1) == "Decisions" else FINDINGS_HEADER
         if text != header:
-            out.append((i, text, header))
+            out.append((i + 1, text, header))
     return out
 
 
@@ -434,8 +470,16 @@ def validate_text(text: str) -> list[tuple[int, str]]:
 
     plan = parse_plan(text)
 
-    # conventions
-    conv_line = next((i for i, ln in enumerate(lines, 1) if ln.rstrip() == CONV_HEADER), None)
+    # conventions, the header read outside any fence (3.5.12 R9)
+    fenced = _fence_mask(lines)
+    conv_line = next(
+        (
+            i + 1
+            for i, ln, in_fence in _unfenced(lines)
+            if ln.rstrip() == CONV_HEADER and not in_fence
+        ),
+        None,
+    )
     if conv_line is None:
         reasons.append((1, f"missing section: {CONV_HEADER!r}"))
     else:
@@ -463,7 +507,7 @@ def validate_text(text: str) -> list[tuple[int, str]]:
                 reasons.append((ln, msg))
         for i in range(conv_line + 1, len(lines) + 1):
             ln = lines[i - 1]
-            if H2_RE.match(ln):
+            if H2_RE.match(ln) and not fenced[i - 1]:
                 break
             if ln.startswith(f"- {TEST_FILES_KEY}:") and not _split_globs(ln.split(":", 1)[1]):
                 msg = f"Conventions {TEST_FILES_KEY} needs at least one comma-separated glob"
@@ -628,9 +672,9 @@ def validate_text(text: str) -> list[tuple[int, str]]:
     # chunks: once any "## Chunk" header exists every step sits under one, and no chunk
     # holds more than CHUNK_CAP steps; both keep the attended batch bounded
     chunk_lines = {
-        ln[3:].strip(): i
-        for i, ln in enumerate(lines, 1)
-        if ln.startswith("## ") and _is_chunk_header(ln)
+        ln[3:].strip(): i + 1
+        for i, ln, in_fence in _unfenced(lines)
+        if not in_fence and ln.startswith("## ") and _is_chunk_header(ln)
     }
     if chunk_lines:
         for s in plan.steps:
@@ -667,8 +711,9 @@ def validate_text(text: str) -> list[tuple[int, str]]:
 
 def _step_body_end(lines: list[str], header_line: int) -> int:
     """1-based line of the last line belonging to the step whose header is at header_line."""
+    fenced = _fence_mask(lines)
     for j in range(header_line, len(lines)):
-        if STEP_RE.match(lines[j]) or H2_RE.match(lines[j]):
+        if (STEP_RE.match(lines[j]) or H2_RE.match(lines[j])) and not fenced[j]:
             return j  # 1-based line before this (j is 0-based index == 1-based of previous)
     return len(lines)
 
@@ -1040,8 +1085,14 @@ def set_status_bytes(data: bytes, n: int, cli_state: str, note: str) -> bytes:
 
 
 def append_section_bytes(data: bytes, section: str, entry: str) -> bytes:
+    """The entry as the section's last bullet. The section ends at the next `## ` line, fenced
+    or not: plan_hash reads the section by that byte rule, which record.mjs shares, so an
+    entry that landed past a fenced header would sit in text the hash reads and an approved
+    plan would lose its hash on the append (rul-850bfc4ad6). When that header is fenced, the
+    entry lands above the fence, not inside it."""
     header = DECISIONS_HEADER if section == "decisions" else FINDINGS_HEADER
     lines = _split_keepends(data)
+    fenced = _fence_mask([raw.decode("utf-8").rstrip("\r\n") for raw in lines])
     # find the header line
     hidx = None
     for i, raw in enumerate(lines):
@@ -1065,9 +1116,12 @@ def append_section_bytes(data: bytes, section: str, entry: str) -> bytes:
     if none_idx is not None:
         lines[none_idx] = entry_line
     else:
-        # insert before the trailing blank lines of the section
+        # insert before the trailing blank lines of the section, and before the fenced block
+        # that carries the header ending it
         insert_at = end
-        while insert_at - 1 > hidx and lines[insert_at - 1].decode("utf-8").strip() == "":
+        while insert_at - 1 > hidx and (
+            fenced[insert_at - 1] or lines[insert_at - 1].decode("utf-8").strip() == ""
+        ):
             insert_at -= 1
         # the line before the insertion point ends with the file's newline, so the bullet
         # never lands mid-line when the section's last line was saved without one
@@ -1145,8 +1199,10 @@ def _clean_legacy_title(rest: str, done: bool | None = None) -> tuple[str, bool 
 def _parse_complete_table(lines: list[str]) -> set[int]:
     done: set[int] = set()
     in_complete = False
-    for ln in lines:
+    for _i, ln, in_fence in _unfenced(lines):
         s = ln.rstrip()
+        if in_fence:
+            continue
         if s == "## Complete":
             in_complete = True
             continue
@@ -1161,9 +1217,24 @@ def _parse_complete_table(lines: list[str]) -> set[int]:
 
 
 def in_grammar(text: str) -> bool:
-    """A plan that already carries the Conventions header is in the grammar; migrating it
-    again would insert a second metadata block under every step."""
-    return any(ln.rstrip() == CONV_HEADER for ln in text.splitlines())
+    """A plan that already carries the Conventions header, outside a fence, is in the grammar;
+    migrating it again would insert a second metadata block under every step."""
+    return any(
+        ln.rstrip() == CONV_HEADER and not in_fence
+        for _i, ln, in_fence in _unfenced(text.splitlines())
+    )
+
+
+def _migrate_next_line(bak: Path) -> str:
+    """The two moves that make the tree clean after a migrate (3.5.12 R6): the plan is left
+    modified and the backup untracked. The backup goes first, since boundary-commit refuses
+    any untracked path beside the plan and the record; the title is the subject only, since
+    boundary-commit writes `docs(plan): <subject>` and refuses a title that already carries
+    a prefix."""
+    return (
+        f"next: remove {bak} then "
+        'python3 $AUTO boundary-commit --title "migrate into the grammar"'
+    )
 
 
 def migrate_text(text: str) -> str:
@@ -1172,7 +1243,9 @@ def migrate_text(text: str) -> str:
 
     # collect legacy step headers and list-item steps, in document order
     hdrs = []
-    for i, ln in enumerate(lines):
+    for i, ln, in_fence in _unfenced(lines):
+        if in_fence:
+            continue
         m = _LEGACY_HEADER_RE.match(ln)
         if m:
             marker, label, num, rest = m.group(2), m.group(3), m.group(4), m.group(5)
@@ -1332,15 +1405,16 @@ def renumber_text(text: str, start: int, by: int) -> tuple[str, dict[int, int], 
         return text, mapping, counts
     header_lines = {s.header_line for s in plan.steps}
     status_lines = {s.status_line for s in plan.steps if s.status_line is not None}
+    fenced = _fence_mask([raw.rstrip("\r\n") for raw in lines])
     section = "preamble"
     for i in range(1, len(lines) + 1):
         raw = lines[i - 1]
         bare = raw.rstrip("\r\n")
         if i == plan.steps[0].header_line:
             section = "bodies"
-        if bare == DECISIONS_HEADER:
+        if bare == DECISIONS_HEADER and not fenced[i - 1]:
             section = "decisions"
-        elif bare == FINDINGS_HEADER:
+        elif bare == FINDINGS_HEADER and not fenced[i - 1]:
             section = "findings"
         if i in header_lines:
             where = "headers"
@@ -1396,9 +1470,12 @@ def _extend_legacy_map(data: bytes, entries: str) -> bytes:
     """The old-to-new mapping on the `- Legacy step map:` line under Findings, after the
     entries already there; the line is created on the first renumber, as migrate creates it."""
     lines = _split_keepends(data)
+    fenced = _fence_mask([raw.decode("utf-8").rstrip("\r\n") for raw in lines])
     in_findings = False
     for i, raw in enumerate(lines):
         bare = raw.decode("utf-8").rstrip("\r\n")
+        if fenced[i]:
+            continue
         if bare.startswith("## "):
             in_findings = bare == FINDINGS_HEADER
         elif in_findings and bare.startswith(f"- {LEGACY_MAP_KEY}:"):
@@ -1554,6 +1631,7 @@ def main(argv: list[str] | None = None) -> int:
             plan_path.write_bytes(b"".join(lines))
             for _ln, found, header in misses:
                 print(f"migrated {plan_path}: renamed {found!r} to {header!r} (backup at {bak})")
+            print(_migrate_next_line(bak))
             return 0
         bak = plan_path.with_suffix(plan_path.suffix + ".bak")
         bak.write_bytes(data)
@@ -1564,6 +1642,7 @@ def main(argv: list[str] | None = None) -> int:
             migrated = migrated.replace("\n", "\r\n")
         plan_path.write_text(migrated, encoding="utf-8", newline="")
         print(f"migrated {plan_path} (backup at {bak})")
+        print(_migrate_next_line(bak))
         return 0
 
     if args.cmd == "status":
