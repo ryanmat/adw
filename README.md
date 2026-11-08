@@ -1,4 +1,4 @@
-<p align="center"><img src="https://github.com/ryanmat/adw/releases/download/v3.5.8/adw-logo.png" alt="ADW" width="720"></p>
+<p align="center"><img src="https://github.com/ryanmat/adw/releases/download/v3.5.12/adw-logo.png" alt="ADW" width="720"></p>
 
 The intent, spec, plan, run pipeline for Claude Code: a person writes the intent by hand, `/adw:spec` writes the spec, `/adw:plan-tdd` writes the test-driven plan, and `/adw:next` executes it in chunk-paced attended batches or unattended to a pull request, with deterministic checks on the code and graded evals on model behavior.
 
@@ -17,7 +17,7 @@ Nothing in the plugin is standing agent context; every piece is loaded by the pl
 Python 3.12 or later on `PATH` as `python3` (the scripts and hooks are standard library and run on whichever `python3` Claude Code finds first; a lower version prints one line and the hooks stand down, except the guard hook, which keeps its denials from 3.9), `uv` for a Python project, and `gh` logged in for pull requests. Install at user scope, pinned to a release tag:
 
 ```bash
-claude plugin marketplace add ryanmat/adw@v3.5.11
+claude plugin marketplace add ryanmat/adw@v3.5.12
 claude plugin install adw@adw --scope user
 ```
 
@@ -35,7 +35,7 @@ Unattended runs need an owner allow-list before they do anything. Set it in the 
 
 With no `ADW_OWNERS`, every preflight refuses.
 
-Two machines agree when their installed records carry the same commit SHA. The record carries the tag's commit (v3.5.8 is 508911b), not the head of `main`, which moves with documentation commits between releases:
+Two machines agree when their installed records carry the same commit SHA. The record carries the tag's commit (v3.5.11 is 4a182d2), not the head of `main`, which moves with documentation commits between releases:
 
 ```bash
 python3 -c 'import json,os;p=os.path.join(os.environ.get("CLAUDE_CONFIG_DIR",os.path.expanduser("~/.claude")),"plugins","installed_plugins.json");d=json.load(open(p))["plugins"];print(json.dumps({k:v for k,v in d.items() if k.startswith("adw@")},indent=1))'
@@ -93,7 +93,7 @@ An intent sits above a spec: the outcome that several pieces of work serve toget
 - `docs/first-feature.md` - the walkthrough: the three commands once on a real repository, with the spec, the plan, the loop's output, the reviewer verdict, the boundary report and the pull request body it produced.
 - `docs/intent.md` - the optional intent above a spec: the seven-section file, the path of its id through the spec and plan headers to the pull request trailer and the Now table, and the `query intent` report.
 - `ai-dev-workflow.md` - the methodology: surfaces and their jobs, weight classes, the phases from the optional intent through unattended execution and shipping, config placement.
-- `workflow-runbook.md` - the step-by-step operating procedure; the moves without the reasoning.
+- `workflow-runbook.md` - the step-by-step operating procedure.
 - `.claude-plugin/` - `plugin.json` (name `adw`, version) and `marketplace.json` (one plugin, sourced from this root).
 - `commands/` - `spec.md` (`/adw:spec`: interview, quick, and v0 pre-discovery modes), `plan-tdd.md` (`/adw:plan-tdd`), and `next.md` (`/adw:next`, the chunk-paced attended loop and `/adw:next auto`).
 - `agents/` - `next-implementer.md` and `next-reviewer.md`, dispatched as `adw:next-implementer` and `adw:next-reviewer` by an unattended run; `spec-miner.md`, dispatched as `adw:spec-miner` by the operator to mine a brownfield codebase into the baseline `spec.md` that `/adw:plan-tdd` plans against.

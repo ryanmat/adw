@@ -254,6 +254,126 @@ def test_validate_blocked_needs_decision_or_apparatus():
     assert any("BLOCKED" in msg for _, msg in reasons)
 
 
+# 3.5.12 spec R9 (Step 10): every header scan skips fenced lines, so a code block that quotes
+# a header is read as the text it is. plan_hash keeps its byte rule (the ruling in Decisions).
+def _fenced(body, fence="```"):
+    """CANON with a fenced block carrying `body` inside Step 2's body."""
+    return CANON.replace(
+        "Build the engine on top of the parser.\n",
+        f"Build the engine on top of the parser.\n\n{fence}\n{body}\n{fence}\n",
+        1,
+    )
+
+
+def test_a_fenced_decisions_near_miss_validates_clean_and_migrate_refuses(tmp_path):
+    text = _fenced("## Decisions open")
+    assert next_plan.validate_text(text) == []
+    p = write(tmp_path, text)
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 2
+    assert "already in the plan grammar" in r.stderr
+    assert p.read_text() == text
+    assert not (tmp_path / "prompt_plan.md.bak").exists()
+
+
+def test_a_fenced_step_header_keeps_the_step_count_and_next():
+    text = _fenced("### Step 9: ghost\nStatus: PENDING")
+    plan = next_plan.parse_plan(text)
+    assert [s.number for s in plan.steps] == [1, 2, 3]
+    assert next_plan.next_step(plan).number == 2
+    with pytest.raises(SystemExit, match="no step 9 in plan"):
+        next_plan.set_status_bytes(text.encode(), 9, "in-progress", "")
+
+
+def test_a_fenced_chunk_header_is_not_a_chunk():
+    text = _fenced("## Chunk Z: ghost")
+    plan = next_plan.parse_plan(text)
+    assert [s.chunk for s in plan.steps] == ["Chunk A: core"] * 3
+    assert next_plan.validate_text(text) == []
+    assert next_plan.batch_steps(plan)["steps"] == [2, 3]
+
+
+def test_a_tilde_fence_is_a_fence_too():
+    text = _fenced("## Decisions open", fence="~~~")
+    assert next_plan.validate_text(text) == []
+    assert next_plan.missing_near_misses(text) == []
+
+
+def test_an_unclosed_fence_runs_to_the_end_of_the_file():
+    """The cost of the rule: a fence never closed hides every header after it, so Step 3
+    folds into Step 2's body and the trailing sections read as missing; validate names the
+    doubled lines and the missing sections, and the fix is the closing fence."""
+    text = CANON.replace(
+        "Build the engine on top of the parser.\n",
+        "Build the engine on top of the parser.\n\n```\n",
+        1,
+    )
+    assert [s.number for s in next_plan.parse_plan(text).steps] == [1, 2]
+    reasons = [msg for _ln, msg in next_plan.validate_text(text)]
+    assert "Step 2: more than one Status: line (2)" in reasons
+    assert reasons[-2:] == [
+        f"missing section: {next_plan.DECISIONS_HEADER!r}",
+        f"missing section: {next_plan.FINDINGS_HEADER!r}",
+    ]
+
+
+def test_append_lands_before_a_fenced_header_as_plan_hash_reads_the_section():
+    """rul-850bfc4ad6 (2026-11-08, the Chunk D review): the append's section end is
+    plan_hash's byte rule, any `## ` line, fenced or not, so an entry never lands in text the
+    hash reads and an approved plan keeps its hash through its appends."""
+    text = CANON.replace(
+        "## Findings\n(none)\n",
+        "## Findings\n- first.\n\n```\n## Not a header\n```\n- third, after the fence.\n",
+        1,
+    )
+    out = next_plan.append_section_bytes(text.encode(), "findings", "second.").decode()
+    assert out.endswith(
+        "- first.\n- second.\n\n```\n## Not a header\n```\n- third, after the fence.\n"
+    )
+    assert next_plan.plan_hash(out) == next_plan.plan_hash(text)
+
+
+# rul-d97374d6fe (2026-11-08, the Chunk D review): the three scans R9(b) left reading fences
+def test_in_grammar_ignores_a_fenced_conventions_header(tmp_path):
+    text = (
+        "# X Implementation Plan\n\n```\n## Conventions binding every step\n```\n\n"
+        "## Step 1: a [done]\nbody\n"
+    )
+    assert next_plan.in_grammar(text) is False
+    p = write(tmp_path, text)
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 0, r.stderr
+    assert next_plan.in_grammar(p.read_text()) is True
+
+
+def test_validate_anchors_the_conventions_checks_on_the_unfenced_header():
+    """A fenced copy of the header before the real one, carrying an empty Test-files line:
+    validate's key checks and line numbers anchor on the real header, so the plan is clean."""
+    text = CANON.replace(
+        "## Conventions binding every step\n",
+        "```\n## Conventions binding every step\n- Test-files: \n```\n\n"
+        "## Conventions binding every step\n",
+        1,
+    )
+    assert next_plan.validate_text(text) == []
+
+
+def test_renumber_section_counts_ignore_a_fenced_header():
+    base_counts = next_plan.renumber_text(RENUMBER_PLAN, start=7, by=1)[2]
+    text = RENUMBER_PLAN.replace(
+        "Build the engine on Step 6;", "```\n## Findings\n```\nBuild the engine on Step 6;", 1
+    )
+    assert text != RENUMBER_PLAN
+    _out, _mapping, counts = next_plan.renumber_text(text, start=7, by=1)
+    assert counts == base_counts
+
+
+def test_migrate_text_ignores_a_fenced_legacy_header():
+    text = "# X Implementation Plan\n\n## Step 1: a [done]\nbody\n\n```\n## Step 2: ghost\n```\n"
+    plan = next_plan.parse_plan(next_plan.migrate_text(text))
+    assert [s.number for s in plan.steps] == [1]
+
+
 def test_validate_reasons_have_line_numbers():
     text = CANON.replace("Status: PENDING", "Status: WIP", 1)
     reasons = next_plan.validate_text(text)
@@ -751,7 +871,8 @@ def test_migrate_renames_a_near_miss_header_and_the_result_validates(tmp_path):
     r = run_cli("migrate", str(p))
     assert r.returncode == 0, r.stderr
     bak = tmp_path / "prompt_plan.md.bak"
-    assert r.stdout.strip() == (
+    # the result line; the clean-up line after it is 3.5.12 R6's, pinned below
+    assert r.stdout.strip().splitlines()[0] == (
         f"migrated {p}: renamed '## Decisions open' to {next_plan.DECISIONS_HEADER!r} "
         f"(backup at {bak})"
     )
@@ -764,7 +885,8 @@ def test_migrate_renames_both_near_misses_one_line_each(tmp_path):
     p = write(tmp_path, NEAR_DECISIONS.replace("## Findings", "## Findings so far", 1))
     r = run_cli("migrate", str(p))
     assert r.returncode == 0, r.stderr
-    assert len(r.stdout.strip().splitlines()) == 2
+    # one line per rename, then the clean-up line (3.5.12 R6)
+    assert len(r.stdout.strip().splitlines()) == 3
     assert p.read_text() == CANON
 
 
@@ -788,7 +910,8 @@ def test_migrate_renames_the_first_of_two_near_misses_of_one_absent_header(tmp_p
     p = write(tmp_path, NEAR_DECISIONS.replace("## Findings\n", second, 1))
     r = run_cli("migrate", str(p))
     assert r.returncode == 0, r.stderr
-    assert len(r.stdout.strip().splitlines()) == 1
+    # the one rename, then the clean-up line (3.5.12 R6)
+    assert len(r.stdout.strip().splitlines()) == 2
     renamed = p.read_text()
     # whole lines, not substrings: the public tree's header is a prefix of the second near miss
     assert renamed.splitlines().count(next_plan.DECISIONS_HEADER) == 1
@@ -813,6 +936,48 @@ def test_migrate_refuses_its_own_output(tmp_path):
     once = p.read_bytes()
     assert run_cli("migrate", str(p)).returncode == 2
     assert p.read_bytes() == once
+
+
+# 3.5.12 spec R6 (Step 9): migrate leaves the plan modified and the .bak untracked, so after
+# its result it prints the two moves that make the tree clean again, the plan path as given.
+# The backup goes first, since boundary-commit refuses an untracked path beside the plan (the
+# Chunk D review's Critical), and the commit subject is boundary-commit's docs(plan): form,
+# since that command refuses a title that already carries a conventional prefix (the Step 9
+# rulings in Decisions). tests/test_next_auto.py runs the printed moves in order.
+def _clean_up_line(plan):
+    return (
+        f"next: remove {plan}.bak then "
+        'python3 $AUTO boundary-commit --title "migrate into the grammar"'
+    )
+
+
+def test_migrate_near_miss_prints_the_clean_up_line_after_its_result(tmp_path):
+    p = write(tmp_path, NEAR_DECISIONS)
+    r = run_cli("migrate", "prompt_plan.md", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.strip().splitlines()
+    assert lines[0].startswith("migrated prompt_plan.md: renamed '## Decisions open'")
+    assert lines[1:] == [_clean_up_line("prompt_plan.md")]
+    assert p.read_text() == CANON
+
+
+def test_migrate_legacy_prints_the_clean_up_line_after_its_result(tmp_path):
+    p = write(tmp_path, "# X Implementation Plan\n\n## Step 1: a [done]\nbody\n")
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 0, r.stderr
+    bak = tmp_path / "prompt_plan.md.bak"
+    assert r.stdout.strip().splitlines() == [
+        f"migrated {p} (backup at {bak})",
+        _clean_up_line(str(p)),
+    ]
+
+
+def test_migrate_refusal_prints_no_clean_up_line(tmp_path):
+    p = write(tmp_path, CANON)
+    r = run_cli("migrate", str(p))
+    assert r.returncode == 2
+    assert r.stdout == ""
+    assert "next:" not in r.stderr
 
 
 def test_validate_rejects_duplicated_step_lines():

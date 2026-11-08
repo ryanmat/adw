@@ -304,17 +304,22 @@ def test_marketplace_lists_adw_at_the_repo_root():
     assert entry["version"] == plugin["version"]
 
 
-RELEASE_VERSION = "3.5.11"
+RELEASE_VERSION = "3.5.12"
 
 
 def test_manifests_read_the_release_version_and_agree():
-    """The release step bumps both manifests to the version it tags, so each reads the
-    release version and the two agree; the pin moves with each release step."""
-    market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
-    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == RELEASE_VERSION
-    assert market["plugins"][0]["version"] == RELEASE_VERSION
-    assert market["plugins"][0]["version"] == plugin["version"]
+    """The release step bumps the two manifests to the version it tags, so each reads the
+    release version and both agree; the pin moves with each release step (R11 of the
+    3.5.12 spec)."""
+    manifests = {
+        ".claude-plugin/plugin.json": json.loads(
+            (ROOT / ".claude-plugin" / "plugin.json").read_text()
+        )["version"],
+        ".claude-plugin/marketplace.json": json.loads(
+            (ROOT / ".claude-plugin" / "marketplace.json").read_text()
+        )["plugins"][0]["version"],
+    }
+    assert manifests == {path: RELEASE_VERSION for path in manifests}
 
 
 def test_commands_carry_frontmatter_descriptions():
@@ -350,7 +355,7 @@ def test_goal_line_names_plugin_command():
 
 def test_scenario_prompts_name_plugin_command():
     files = sorted(SCENARIOS.glob("*.json"))
-    assert len(files) == 9, [f.name for f in files]
+    assert len(files) == 10, [f.name for f in files]
     attended = {"attended-chunk-stop", "attended-check-blocks-gaming"}
     for f in files:
         prompt = json.loads(f.read_text())["prompt"]
@@ -1814,6 +1819,115 @@ def test_next_md_describes_the_hand_back_without_a_pull_request():
     assert "`RUN STOPPED <reason> NO PR: no step committed`" in doc
     assert "`RUN STOPPED <reason> PR #n`" in doc
     assert "RECORD SKIPPED" not in doc
+    # 3.5.12 R2: a commit means a wrap-up; the hand-back is the one end of turn without one
+    assert "Once `commit K` has landed, the run reaches `wrap-up` before it ends" in doc
+
+
+def test_next_md_migrate_names_the_two_moves_that_clean_the_tree():
+    """3.5.12 R6 (Step 9): the migrate sentence carries the two moves migrate prints in the
+    order they run, the backup removed before the commit, since boundary-commit refuses an
+    untracked path beside the plan (the Chunk D review's Critical); the clean-tree check names
+    no .bak, because nothing is left for it to tolerate."""
+    doc = (COMMANDS / "next.md").read_text()
+    sentence = next(
+        ln for ln in doc.splitlines() if ln.startswith("In interactive mode, show the owner")
+    )
+    assert 'python3 $AUTO boundary-commit --title "migrate into the grammar"' in sentence
+    assert "`docs(plan): migrate into the grammar`" in sentence
+    assert "remove the `.bak`" in sentence
+    assert sentence.index("remove the `.bak`") < sentence.index("$AUTO boundary-commit")
+    assert ".bak" not in _next_md_item(1, "Clean-tree check.")
+
+
+def test_next_md_names_review_skipped_once_in_item_7_and_once_in_stopping():
+    """3.5.12 R2 (rul-df43122a34): item 7 opens with the commit-means-wrap-up rule and names
+    the flag once; the Stopping paragraph says a budget, turn or context stop after a commit
+    is a wrap-up and names the flag once, so a coordinator at its budget finds the command."""
+    sec = _auto_section()
+    item7 = next(ln for ln in sec.splitlines() if ln.startswith("7. "))
+    assert item7.startswith(
+        "7. Once `commit K` has landed, the run reaches `wrap-up` before it ends"
+    )
+    assert item7.count("--review-skipped budget") == 1
+    assert "`budget`, `turns` or `context`" in item7
+    stopping = next(p for p in sec.split("\n\n") if p.startswith("**Stopping.**"))
+    assert "A budget, turn or context stop after a commit is a wrap-up" in stopping
+    assert "never a bare end of turn" in stopping
+    assert "ends its turn without `wrap-up` only when nothing is committed" in stopping
+    assert stopping.count("--review-skipped budget") == 1
+
+
+def test_next_md_item_2_resumes_a_turn_limit_stop_once_then_hands_back():
+    """3.5.12 R3 (rul-4940738836): the 2026-11-04 factory night resumed an implementer
+    that stopped at its 60-turn limit and the resumed lane ran 114 turns at 186k context.
+    Item 2 says the coordinator resumes once, with one message naming the worktree's state
+    and asking for the report, and a second limit on the same step is a revert and a decision
+    hand-back; it never resumes twice and never finishes the step's code itself. maxTurns
+    stays 60 in the implementer's definition."""
+    dispatch = next(
+        ln for ln in _auto_section().splitlines()
+        if ln.startswith("2. Dispatch the `adw:next-implementer`")
+    )
+    assert dispatch.count("stopped at its 60-turn limit") == 1
+    assert "one message" in dispatch
+    assert "`git status --porcelain`" in dispatch and "`git diff --stat`" in dispatch
+    assert "asking for the report" in dispatch
+    assert "`python3 $AUTO revert K`" in dispatch
+    assert "`python3 $AUTO set K blocked-decision --note-file ...`" in dispatch
+    assert (
+        "Decision: Step K did not fit one implementer lane in two passes; "
+        "split it or raise its Size"
+    ) in dispatch
+    assert "never resumes twice" in dispatch
+    assert "never finishes a step's code itself" in dispatch
+    assert "maxTurns: 60" in (AGENTS / "next-implementer.md").read_text()
+
+
+def test_next_md_and_the_reviewer_carry_the_three_re_review_forms():
+    """3.5.12 R4 (rul-5a7bc322a6): the re-review verdict line has three forms, the first two
+    map to Approved and the third to NeedsFixes, in both modes; the record names the open
+    Minors through --open-minor; the reviewer's Minor definition says never blocking."""
+    forms = (
+        "All findings addressed, no new Critical",
+        "All Critical and Important findings addressed; Minor open:",
+        "Findings remain open:",
+    )
+    sec = _attended_section()
+    mapping = next(
+        p for p in sec.split("\n\n") if p.startswith("`<sha>` is the HEAD the review covered.")
+    )
+    for form in forms:
+        assert form in mapping, form
+    first_two = mapping.index(forms[1])
+    assert mapping.index("`Approved`", first_two) < mapping.index(forms[2])
+    assert "`NeedsFixes`" in mapping[mapping.index(forms[2]) :]
+    assert mapping.count("--open-minor") == 1
+    item7 = next(ln for ln in _auto_section().splitlines() if ln.startswith("7. "))
+    for form in forms:
+        assert form in item7, form
+    assert item7.count("--open-minor") == 1
+    reviewer = (AGENTS / "next-reviewer.md").read_text()
+    line = next(ln for ln in reviewer.splitlines() if ln.startswith("Fix round: "))
+    assert line == "Fix round: " + " | ".join(
+        (forms[0], forms[1] + " <list>", forms[2] + " <list>")
+    )
+    minor = next(ln for ln in reviewer.splitlines() if ln.startswith("- **Minor**:"))
+    assert "never blocking" in minor
+
+
+def test_next_md_fix_round_covers_any_step_of_the_chunk_and_commits_as_a_fix():
+    """3.5.12 R5 (rul-a4012a6d7c): a Critical on any step of the chunk is addressed in one fix
+    round based at the chunk's last commit, committed with a fix(...) subject through
+    `commit N --fix`; the auto round's commit carries fix(step-K):."""
+    sec = _attended_section()
+    boundary = sec[sec.index("**At the chunk boundary.**") :]
+    assert "any step of the chunk" in boundary
+    assert "based at the chunk's last commit" in boundary
+    assert boundary.count('python3 $AUTO commit N --fix "<summary>"') == 1
+    assert "`fix(chunk <L>): <summary>`" in boundary
+    assert "`fix(step-N): <summary>`" in boundary
+    item7 = next(ln for ln in _auto_section().splitlines() if ln.startswith("7. "))
+    assert "`fix(step-K): <title>`" in item7
 
 
 # ---- boundary-commit's skip line for an untracked plan (3.5.10 spec R3, Step 3) -----------------

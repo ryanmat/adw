@@ -2,6 +2,24 @@
 
 Each entry describes one release of the plugin; a release entry lists what it removes under a bullet that begins "Removed:", one item per surface.
 
+## 3.5.12 (2026-11-08)
+
+Curated from the maintainer's development repository after the engine merge 580c016, plus this release's version and documentation edits.
+
+The two defects the unattended runs of November 2026 found, then the items the 3.5.11 release sitting queued:
+
+- The red proof attributes a bare Python module to the step when a changed `.py` file carries its name: a module the step adds under a root the tree arranges through `conftest.py`'s `sys.path` no longer reads as a foreign module, so the check is red where it should be rather than `CHECK APPARATUS`; the eval harness gains the `scripts-root` scenario for it.
+- A committed step always reaches wrap-up: when the budget cannot carry the review, the coordinator runs `wrap-up --review-skipped <budget|turns|context>`, the title, the body and the `RUN STOPPED` line all carry the marker, a re-run after a failed push keeps it, and the flag is refused on a run that committed no step.
+- A turn-limit stop is resumed once, with one message asking for the report, and a second turn-limit note on the same step reverts it and hands back a decision.
+- A re-review approves with Minors open: the fix-round verdict has three forms, `verdict --open-minor <label>` records what was left, and Minor findings never block.
+- One fix round for the chunk, at the chunk's last commit, committed as `commit N --fix "<summary>"`, which writes `fix(chunk L): <summary>` or `fix(step-N): <summary>` and refuses a step with no prior `feat(step-N)` commit on the plan's branch.
+- `migrate` prints how the tree gets clean: `next: remove <plan>.bak then python3 $AUTO boundary-commit --title "migrate into the grammar"`, the backup first because `boundary-commit` refuses an untracked path.
+- The verdict filter reads only direct bullets as findings: a margin prose line under a severity header ends that section's plain bullets, so a reviewer's evidence sub-bullets are no longer dropped as findings without a `file:line`; a bullet that itself starts with `file:line` still counts.
+- The plan grammar ignores fenced code blocks in every header scan, and an append to Decisions or Findings lands above a fenced `## ` line so an approved plan's hash holds.
+- The eval harness clears the fixture clone's `.remember/` before `git clean` and retries the clean once.
+- The curated engine keeps two blank lines before a top-level `def` or `class` that follows a stripped definition, so `ruff format --check` passes on the public tree.
+- `README.md`: the logo asset and the install line name this release, the drift-check example names the newest earlier tag's commit (v3.5.11 is 4a182d2), and the runbook's description appears once.
+
 ## 3.5.11 (2026-11-06)
 
 Curated from the maintainer's development repository after the engine merge b4b84f6, plus this release's version and documentation edits.
